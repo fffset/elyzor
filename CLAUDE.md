@@ -215,7 +215,7 @@ elyzor/
 │   ├── auth/
 │   │   ├── auth.router.ts
 │   │   ├── auth.service.ts
-│   │   ├── auth.repository.ts
+│   │   ├── auth.repository.ts        # refresh_tokens koleksiyonu
 │   │   └── auth.types.ts
 │   ├── users/
 │   │   ├── users.model.ts
@@ -414,9 +414,64 @@ export const errorHandler = (
 
 ### auth/
 Platform kullanıcı kimlik doğrulamasını yönetir (API tüketicilerini değil).
+
+**Endpoint'ler:**
 - `POST /v1/auth/register` — hesap oluştur
-- `POST /v1/auth/login` — JWT döner
-- JWT, tüm proje/key yönetim endpoint'lerini korur
+- `POST /v1/auth/login` — access token + refresh token döner
+- `POST /v1/auth/refresh` — yeni access token al
+- `POST /v1/auth/logout` — token'ları iptal et
+- `POST /v1/auth/logout-all` — tüm cihazlardan çık
+
+**Token stratejisi:**
+
+```
+access token  → 15 dakika, Authorization header'da taşınır
+refresh token → 7 gün, HTTP-only cookie'de taşınır
+```
+
+Access token expire olunca refresh token ile yenisi alınır. Kullanıcı tekrar login olmak zorunda kalmaz.
+
+**Logout — token blacklist:**
+
+JWT stateless olduğu için logout'ta token'ı direkt iptal edemeyiz. Çözüm: Redis blacklist.
+
+```ts
+// Logout akışı
+// 1. access token → Redis blacklist'e ekle (TTL = token'ın kalan süresi)
+// 2. refresh token → MongoDB'den sil, Redis cache'ini temizle
+
+// Her istekte authGuard blacklist'i kontrol eder
+const isBlacklisted = await redis.get(`blacklist:${token}`);
+if (isBlacklisted) throw new UnauthorizedError("Token iptal edilmiş");
+```
+
+**Refresh token saklama — hem Redis hem MongoDB:**
+
+```
+Refresh token geldi
+        │
+   Redis'te var mı?
+        │
+  ├── Evet → doğrula, yeni access token ver
+  └── Hayır → MongoDB'ye bak
+                │
+          ├── Var → Redis'e yaz, doğrula
+          └── Yok → 401 dön
+```
+
+MongoDB source of truth, Redis cache. Redis çökerse MongoDB'ye fallback — aynı verification mantığı.
+
+**refresh_tokens koleksiyonu:**
+
+```ts
+{
+  userId:     ObjectId,
+  tokenHash:  string,       // plaintext değil, SHA-256 hash
+  expiresAt:  Date,         // TTL index ile otomatik silinir
+  revokedAt:  Date | null,  // null ise aktif
+  createdAt:  Date,
+}
+```
 
 ### projects/
 Tenant izolasyon katmanı. Her API key bir projeye aittir.
@@ -525,6 +580,9 @@ export interface ProjectStatsResponse {
 ```
 POST   /v1/auth/register
 POST   /v1/auth/login
+POST   /v1/auth/refresh
+POST   /v1/auth/logout
+POST   /v1/auth/logout-all
 ```
 
 ### Projeler
@@ -581,11 +639,13 @@ POST   /v1/verify
 
 Bunlar pazarlık konusu değildir. Asla ihlal edilmez:
 
-1. **API key'leri asla plaintext saklanmaz.** MongoDB'ye yazmadan önce `crypto` ile hash'le (SHA-256).
-2. **Key doğrulamada her zaman constant-time comparison kullan.** `crypto.timingSafeEqual()` kullan.
+1. **API key'ler SHA-256, şifreler bcrypt ile hash'lenir.** Bu ikisini asla karıştırma. API key brute-force'a doğası gereği dayanıklı — SHA-256 yeterli ve hızlı. Şifreler kısa ve tahmin edilebilir — bcrypt'in intentional yavaşlığı bir özellik.
+2. **Key doğrulamada her zaman constant-time comparison kullan.** `crypto.timingSafeEqual()` kullan. Normal `===` timing attack'a açık.
 3. **Fail closed.** Altyapı hatası nedeniyle doğrulama tamamlanamazsa `valid: false` döndür.
 4. **Tenant izolasyonu.** Herhangi bir key işlemi öncesinde isteği yapan kullanıcının projeye sahip olduğunu doğrula.
 5. **Tüm yönetim endpoint'lerinde JWT zorunlu.** Yalnızca `/v1/verify` ve auth endpoint'leri public'tir.
+6. **Logout token blacklist ile yapılır.** Access token Redis'e eklenir, refresh token MongoDB'den silinir.
+7. **Rate limiting çok katmanlı uygulanır.** IP bazlı + key bazlı + endpoint bazlı. Sadece key bazlı yetmez.
 
 ---
 
@@ -596,9 +656,13 @@ PORT=3000
 MONGO_URI=mongodb://localhost:27017/elyzor
 REDIS_URL=redis://localhost:6379
 JWT_SECRET=production_ortaminda_degistir
-JWT_EXPIRES_IN=7d
-RATE_LIMIT_MAX=100
-RATE_LIMIT_WINDOW_SECONDS=60
+JWT_ACCESS_EXPIRES_IN=15m
+JWT_REFRESH_EXPIRES_IN=7d
+RATE_LIMIT_IP_MAX=60
+RATE_LIMIT_IP_WINDOW_SECONDS=60
+RATE_LIMIT_KEY_MAX=100
+RATE_LIMIT_KEY_WINDOW_SECONDS=60
+BCRYPT_ROUNDS=12
 ```
 
 Env değişkenleri `src/config/env.ts` üzerinden okunur — kod içinde `process.env.X` doğrudan kullanılmaz:
@@ -609,10 +673,22 @@ export const env = {
   port: Number(process.env.PORT) || 3000,
   mongoUri: process.env.MONGO_URI!,
   redisUrl: process.env.REDIS_URL!,
-  jwtSecret: process.env.JWT_SECRET!,
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  rateLimitMax: Number(process.env.RATE_LIMIT_MAX) || 100,
-  rateLimitWindowSeconds: Number(process.env.RATE_LIMIT_WINDOW_SECONDS) || 60,
+  jwt: {
+    secret: process.env.JWT_SECRET!,
+    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
+    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
+  },
+  rateLimit: {
+    ip: {
+      max: Number(process.env.RATE_LIMIT_IP_MAX) || 60,
+      windowSeconds: Number(process.env.RATE_LIMIT_IP_WINDOW_SECONDS) || 60,
+    },
+    key: {
+      max: Number(process.env.RATE_LIMIT_KEY_MAX) || 100,
+      windowSeconds: Number(process.env.RATE_LIMIT_KEY_WINDOW_SECONDS) || 60,
+    },
+  },
+  bcryptRounds: Number(process.env.BCRYPT_ROUNDS) || 12,
 };
 ```
 

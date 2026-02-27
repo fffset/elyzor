@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { UnauthorizedError } from '../errors';
 import { env } from '../config/env';
+import redis from '../config/redis';
 
 interface JwtPayload {
   userId: string;
@@ -16,12 +17,24 @@ export function authGuard(req: Request, _res: Response, next: NextFunction): voi
   }
 
   const token = authHeader.slice(7);
+
+  let payload: JwtPayload;
   try {
-    const payload = jwt.verify(token, env.jwtSecret) as JwtPayload;
+    payload = jwt.verify(token, env.jwt.secret) as JwtPayload;
+  } catch {
+    next(new UnauthorizedError('Geçersiz veya süresi dolmuş token'));
+    return;
+  }
+
+  redis.get(`blacklist:${token}`).then((blacklisted) => {
+    if (blacklisted) {
+      next(new UnauthorizedError('Token iptal edilmiş'));
+      return;
+    }
     req.userId = payload.userId;
     req.userEmail = payload.email;
     next();
-  } catch {
-    next(new UnauthorizedError('Geçersiz veya süresi dolmuş token'));
-  }
+  }).catch(() => {
+    next(new UnauthorizedError('Yetkilendirme hatası'));
+  });
 }

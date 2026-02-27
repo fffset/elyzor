@@ -99,3 +99,77 @@ Katmanlı mimari ve modüler yapı sayesinde ileride bir modülü (örn. verific
 `process.env.JWT_SECRET` kod içinde her yerde kullanılırsa iki sorun çıkar: tip güvenliği olmaz (hepsi `string | undefined`) ve hangi env değişkeninin nerede kullanıldığı dağınık kalır. Merkezi `env.ts` hem tip güvenliği sağlar hem de tüm konfigürasyonu tek yerden yönetmeyi mümkün kılar.
 
 Eksik bir env değişkeni uygulama başlarken hata verir, çalışırken değil.
+
+---
+
+## 009 — Refresh token hem Redis hem MongoDB'de saklanır
+
+**Karar:** Refresh token'lar MongoDB'de kalıcı olarak, Redis'te cache olarak tutulur.
+
+**Gerekçe:**
+Sadece Redis'te saklamak hızlı ama riskli — Redis uçtuğunda tüm kullanıcılar logout olur. Redis bu projede source of truth değil, performans katmanı. Sadece MongoDB'de saklamak güvenilir ama her refresh isteğinde DB'ye gitmek gereksiz yavaş.
+
+İkisini birlikte kullanmak verification servisindeki Redis → MongoDB fallback mantığının aynısı: Redis cache, MongoDB source of truth.
+
+**Uygulama:**
+- Refresh token geldiğinde önce Redis'e bakılır
+- Redis'te yoksa MongoDB'ye bakılır, bulunursa Redis'e yazılır
+- MongoDB'deki kayıt TTL index ile otomatik temizlenir
+- Logout veya token revocation'da hem Redis hem MongoDB güncellenir
+
+**Trade-off:** İki katmanlı yönetim biraz daha karmaşık. Ama tutarsız state riskini ortadan kaldırır.
+
+---
+
+## 010 — Access token kısa, refresh token uzun ömürlü
+
+**Karar:** Access token 15 dakika, refresh token 7 gün geçerli.
+
+**Gerekçe:**
+Uzun ömürlü access token çalınırsa uzun süre kullanılabilir. Kısa ömürlü access token bu pencereyi daraltır. Refresh token ile yeni access token alınır, kullanıcı her 15 dakikada tekrar login olmak zorunda kalmaz.
+
+Refresh token HTTP-only cookie'de taşınır — JavaScript erişemez, XSS saldırılarına karşı korumalıdır.
+
+**Trade-off:** Her 15 dakikada bir token yenileme isteği olur. Bu düşük frekanslı bir işlem, performans etkisi ihmal edilebilir.
+
+---
+
+## 011 — Logout token blacklist ile yapılır
+
+**Karar:** Logout olunca access token Redis blacklist'e eklenir, süresi dolana kadar orada kalır.
+
+**Gerekçe:**
+JWT stateless olduğu için token imzası geçerli olduğu sürece sunucu tarafında iptal edilemez. Blacklist bu sorunu çözer. Redis'te tutmak mantıklı çünkü token süresi dolunca zaten geçersiz — kalıcı depolamaya gerek yok.
+
+"Tüm cihazlardan çık" özelliği için kullanıcının tüm refresh token'ları MongoDB'den silinir, Redis cache'i temizlenir.
+
+**Trade-off:** Her verification isteğinde Redis'te blacklist kontrolü yapılır. Bu ek bir Redis lookup — ama zaten verification zincirinde Redis kullanılıyor, ekstra maliyet minimal.
+
+---
+
+## 012 — Rate limiting çok katmanlı uygulanır
+
+**Karar:** Rate limiting sadece API key bazında değil, IP bazında ve endpoint bazında da uygulanır.
+
+**Gerekçe:**
+Tek boyutlu rate limiting (key başına X istek) brute-force ve credential stuffing saldırılarına karşı yetersiz. Saldırgan key'i bilmese bile `/v1/auth/login`'e yüksek frekansta istek atabilir.
+
+**Üç katman:**
+- **IP bazlı** — key olmadan gelen isteklere karşı, `/v1/auth/login` ve `/v1/auth/register` için kritik
+- **Key bazlı** — verification endpoint'i için, her projenin kendi limiti var
+- **Endpoint bazlı** — `/v1/verify` daha yüksek limit alabilir, yönetim endpoint'leri daha düşük
+
+**Trade-off:** Üç ayrı Redis counter yönetimi. Ama Redis bu iş için tasarlandı, operasyonel yük minimal.
+
+---
+
+## 013 — API key hash algoritması SHA-256, şifre hash algoritması bcrypt
+
+**Karar:** API key'ler SHA-256 ile, kullanıcı şifreleri bcrypt ile hash'lenir.
+
+**Gerekçe:**
+API key'ler uzun, rastgele string'lerdir — brute-force'a karşı doğası gereği dayanıklılar. SHA-256 yeterli ve hızlı. Verification path'inde <5ms hedefi var, bcrypt'in intentional yavaşlığı burada istenmiyor.
+
+Kullanıcı şifreleri ise genellikle kısa ve tahmin edilebilir. bcrypt'in yavaşlığı (cost factor) burada bir özellik — brute-force saldırılarını yavaşlatır.
+
+**Kural:** Bu ayrımı asla karıştırma. API key'e bcrypt, şifreye SHA-256 kullanmak her iki tarafta da yanlış sonuç verir.

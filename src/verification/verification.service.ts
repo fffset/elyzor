@@ -31,6 +31,13 @@ export class VerificationService {
     return crypto.createHash('sha256').update(secretPart).digest('hex');
   }
 
+  private timingSafeCompare(a: string, b: string): boolean {
+    const aBuf = Buffer.from(a);
+    const bBuf = Buffer.from(b);
+    if (aBuf.length !== bBuf.length) return false;
+    return crypto.timingSafeEqual(aBuf, bBuf);
+  }
+
   private cacheKey(secretHash: string): string {
     return `apikey:${secretHash}`;
   }
@@ -38,6 +45,9 @@ export class VerificationService {
   private async lookupFromDb(secretHash: string): Promise<CachedKeyData | null> {
     const key = await apiKeyRepo.findBySecretHash(secretHash);
     if (!key) return null;
+
+    const storedHash = key.secretHash;
+    if (!this.timingSafeCompare(secretHash, storedHash)) return null;
 
     const cached: CachedKeyData = {
       id: key._id.toString(),
@@ -52,18 +62,18 @@ export class VerificationService {
   private async checkRateLimit(
     projectId: string
   ): Promise<{ exceeded: boolean; remaining: number; retryAfter: number }> {
-    const rateLimitKey = `ratelimit:${projectId}`;
-    const { rateLimitMax, rateLimitWindowSeconds } = env;
+    const rateLimitKey = `ratelimit:key:${projectId}`;
+    const { max, windowSeconds } = env.rateLimit.key;
 
     const current = await redis.incr(rateLimitKey);
     if (current === 1) {
-      await redis.expire(rateLimitKey, rateLimitWindowSeconds);
+      await redis.expire(rateLimitKey, windowSeconds);
     }
 
     const ttl = await redis.ttl(rateLimitKey);
-    const remaining = Math.max(0, rateLimitMax - current);
+    const remaining = Math.max(0, max - current);
 
-    return { exceeded: current > rateLimitMax, remaining, retryAfter: ttl };
+    return { exceeded: current > max, remaining, retryAfter: ttl };
   }
 
   async verify(authHeader: string | undefined, ip: string): Promise<VerifyResult> {
@@ -86,7 +96,7 @@ export class VerificationService {
       const cached = await redis.get(this.cacheKey(secretHash));
       keyData = cached ? (JSON.parse(cached) as CachedKeyData) : await this.lookupFromDb(secretHash);
     } catch (err) {
-      console.error('Verification altyapı hatası:', (err as Error).message);
+      console.error('Verification error:', (err as Error).message);
       return { valid: false, error: 'invalid_key' };
     }
 
@@ -109,7 +119,7 @@ export class VerificationService {
     try {
       rateLimit = await this.checkRateLimit(keyData.projectId);
     } catch (err) {
-      console.error('Rate limit hatası:', (err as Error).message);
+      console.error('Rate limit error:', (err as Error).message);
       return { valid: false, error: 'invalid_key' };
     }
 

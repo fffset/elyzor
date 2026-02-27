@@ -1,4 +1,5 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import authRouter from './auth/auth.router';
 import projectsRouter from './projects/projects.router';
 import apiKeysRouter from './apikeys/apikeys.router';
@@ -8,6 +9,7 @@ import { errorHandler } from './middleware/errorHandler';
 const app = express();
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.use('/v1/auth', authRouter);
 app.use('/v1/projects', projectsRouter);

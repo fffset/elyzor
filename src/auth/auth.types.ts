@@ -8,11 +8,15 @@ export interface LoginDto {
   password: string;
 }
 
-export interface AuthResponse {
-  token: string;
-}
-
 export interface RegisterResponse {
   id: string;
   email: string;
+}
+
+export interface LoginResponse {
+  accessToken: string;
+}
+
+export interface RefreshResponse {
+  accessToken: string;
 }
