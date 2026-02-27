@@ -38,11 +38,37 @@ Key revocation **anlıktır.** Revoke edilen key Redis cache'inden temizlenir, b
 
 ### Platform Kullanıcıları (JWT)
 
-Proje ve key yönetimi için JWT kullanılır. Tüm yönetim endpoint'leri `authGuard` middleware'i ile korunur.
+Proje ve key yönetimi için iki katmanlı JWT stratejisi:
+
+| Token | Süre | Taşıma | Amaç |
+|---|---|---|---|
+| Access token | 15 dakika | `Authorization: Bearer` header | Her istekte kimlik doğrulama |
+| Refresh token | 7 gün | HTTP-only cookie | Yeni access token alma |
+
+Access token expire olunca client `POST /v1/auth/refresh` ile yeni access token alır. Refresh token JavaScript'ten erişilemez — XSS saldırılarına karşı korumalı.
+
+**Logout — token blacklist:**
+
+JWT stateless olduğu için token imzası geçerli olduğu sürece sunucu tarafında iptal edilemez. Çözüm:
+
+```
+Logout
+  ├── Access token → Redis blacklist'e eklenir (TTL = token'ın kalan süresi)
+  └── Refresh token → MongoDB'den silinir, Redis cache'i temizlenir
+
+authGuard her istekte:
+  1. JWT imzasını doğrular
+  2. Redis blacklist'i kontrol eder → blacklist'teyse 401
+```
+
+**Logout-all:** Kullanıcının tüm refresh token'ları MongoDB'den silinir (tüm cihazlardan çıkış).
+
+Tüm yönetim endpoint'leri `authGuard` middleware'i ile korunur.
 
 Yalnızca şunlar public'tir:
 - `POST /v1/auth/register`
 - `POST /v1/auth/login`
+- `POST /v1/auth/refresh`
 - `POST /v1/verify`
 
 ### Tenant İzolasyonu
@@ -59,7 +85,14 @@ Her işlem öncesinde isteği yapan kullanıcının ilgili projeye sahip olduğu
 
 ## Rate Limiting
 
-Redis tabanlı rate limiting her API key için ayrı uygulanır. Limit aşıldığında:
+Üç katmanlı Redis tabanlı rate limiting:
+
+| Katman | Kapsam | Endpoint | Config |
+|---|---|---|---|
+| IP bazlı | Tüm IP'ler | `/v1/auth/login`, `/v1/auth/register` | `RATE_LIMIT_IP_MAX` / `RATE_LIMIT_IP_WINDOW_SECONDS` |
+| Key bazlı | Proje başına | `/v1/verify` | `RATE_LIMIT_KEY_MAX` / `RATE_LIMIT_KEY_WINDOW_SECONDS` |
+
+Limit aşıldığında:
 
 ```json
 { "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }

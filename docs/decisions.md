@@ -173,3 +173,30 @@ API key'ler uzun, rastgele string'lerdir — brute-force'a karşı doğası gere
 Kullanıcı şifreleri ise genellikle kısa ve tahmin edilebilir. bcrypt'in yavaşlığı (cost factor) burada bir özellik — brute-force saldırılarını yavaşlatır.
 
 **Kural:** Bu ayrımı asla karıştırma. API key'e bcrypt, şifreye SHA-256 kullanmak her iki tarafta da yanlış sonuç verir.
+
+---
+
+## 014 — Node.js Cluster ile CPU başına worker
+
+**Karar:** Production'da `src/cluster.ts` entrypoint'i kullanılır. Node.js `cluster` modülü ile CPU çekirdeği sayısı kadar worker process fork'lanır.
+
+**Gerekçe:**
+Node.js single-threaded çalışır. 8 çekirdekli bir sunucuda tek process çalıştırmak 7 çekirdeği boşa harcamak demektir. Cluster ile her çekirdek bağımsız bir worker'da Express sunucusu çalıştırır — CPU-bound işler paralel yürütülür, bir worker çöktüğünde diğerleri etkilenmez.
+
+`src/index.ts` (development), `src/cluster.ts` (production) ayrımı korunur. Development'ta hot reload ile çalışmak için cluster karmaşıklığı gerekmez.
+
+**RAM dağılımı:**
+Primary process `os.totalmem() / os.cpus().length` ile her worker'a düşen RAM payını hesaplar. Worker'lar 10 saniyede bir RSS kullanımlarını primary'e raporlar. Payın %80'ini aşan worker loglanır.
+
+**Trade-off:** Her worker ayrı MongoDB ve Redis bağlantısı açar. 8 worker ile connection pool 8 kat büyür. MongoDB ve Redis'in `maxPoolSize` ayarları buna göre yapılandırılmalıdır.
+
+---
+
+## 015 — Constant-time comparison verification'da zorunlu
+
+**Karar:** API key hash karşılaştırması `crypto.timingSafeEqual()` ile yapılır, normal `===` kullanılmaz.
+
+**Gerekçe:**
+Normal string karşılaştırması eşleşen karakter sayısıyla orantılı süre harcar. Saldırgan yeterli sayıda istek göndererek yanıt sürelerindeki farka bakarak geçerli hash prefix'ini kademeli olarak bulabilir (timing attack). `timingSafeEqual` sabit sürede çalışır — karşılaştırma sonucu ne olursa olsun süre değişmez.
+
+**Uygulama:** `src/verification/verification.service.ts` içindeki `timingSafeCompare()` metodu. Buffer uzunlukları da sabit-zamanlı kontrol edilir — uzunluk farkı da bilgi sızdırabilir.
