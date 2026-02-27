@@ -200,3 +200,31 @@ Primary process `os.totalmem() / os.cpus().length` ile her worker'a düşen RAM 
 Normal string karşılaştırması eşleşen karakter sayısıyla orantılı süre harcar. Saldırgan yeterli sayıda istek göndererek yanıt sürelerindeki farka bakarak geçerli hash prefix'ini kademeli olarak bulabilir (timing attack). `timingSafeEqual` sabit sürede çalışır — karşılaştırma sonucu ne olursa olsun süre değişmez.
 
 **Uygulama:** `src/verification/verification.service.ts` içindeki `timingSafeCompare()` metodu. Buffer uzunlukları da sabit-zamanlı kontrol edilir — uzunluk farkı da bilgi sızdırabilir.
+
+---
+
+## 016 — Request validation class-validator ile HTTP sınırında yapılır
+
+**Karar:** Router'lara gelen request body'leri `validateDto(DtoClass)` middleware'i ile doğrulanır. Her domain kendi DTO sınıfını `src/*/dtos/` altında tanımlar.
+
+**Gerekçe:**
+Validation'ı service katmanında yapmak iki sorun çıkarır: service'ler HTTP context'ini bilmemeli (bağımsızlık ilkesi) ve manuel if-check'ler hata yapmaya açık, dağınık kalır. `class-validator` dekoratörleri kuralları DTO tanımıyla birleştirir — bakımı ve okunması kolay.
+
+`whitelist: true` ile tanımsız property'ler otomatik temizlenir. Bu ek bir güvenlik katmanıdır: istemci gönderdiği ekstra alanlar service'e hiç ulaşmaz.
+
+Service katmanında yalnızca iş mantığı kontrolleri kalır (örn. email zaten kayıtlı mı, proje kullanıcıya ait mi).
+
+**Trade-off:** `class-validator` yeni bir bağımlılık. Ama doğrulama ihtiyacı kaçınılmaz; manuel if-check yazmak yerine standart bir kütüphane kullanmak daha güvenilir.
+
+---
+
+## 017 — API dokümantasyonu merkezi OpenAPI spec ile yönetilir
+
+**Karar:** Swagger UI `GET /docs` altında sunulur. Spec `src/config/swagger.ts` içinde tek bir dosyada tanımlıdır. JSDoc annotation kullanılmaz.
+
+**Gerekçe:**
+JSDoc annotation'lar router dosyalarına dağılır, büyük yorum blokları kod okunabilirliğini düşürür ve TypeScript tip sistemiyle senkron tutmak güçleşir. Merkezi spec dosyası tüm endpoint tanımlarını tek yerden yönetmeyi sağlar, diff'leri net tutar.
+
+`swagger-jsdoc` spec'i derlemek için kullanılır; `swagger-ui-express` UI'ı sunmak için. Spec'in kod olarak tanımlanması onu versiyon kontrolüne dahil eder ve CI'da lint edilebilir hale getirir.
+
+**Trade-off:** Router dosyasını değiştirince spec dosyasını da güncellemek gerekir — otomatik sync yok. Bu bilinçli bir tercih: spec'in kasıtlı olarak yazılması, gereksiz endpoint'lerin belgelenmesini önler.

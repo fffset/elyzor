@@ -100,6 +100,16 @@ Limit aşıldığında:
 
 ---
 
+## Input Validation
+
+Tüm request body'leri `validateDto` middleware'i ile HTTP sınırında doğrulanır. `class-validator` dekoratörleri kullanılır.
+
+Her domain kendi DTO sınıfını tanımlar (`src/*/dtos/`). Validation hatası durumunda istek service katmanına ulaşmadan `400 validation_error` döner.
+
+`whitelist: true` seçeneği ile tanımsız property'ler otomatik olarak request body'den temizlenir — mass assignment saldırılarına karşı koruma sağlar.
+
+---
+
 ## V1 Kapsam Dışı
 
 - Webhook imzalama

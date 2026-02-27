@@ -31,7 +31,10 @@ Bağımlılıklar her zaman tek yönde akar:
 HTTP İsteği
      │
      ▼
-  Router          → Sadece HTTP: isteği al, DTO oluştur, response gönder
+  Router          → Sadece HTTP: isteği al, response gönder
+     │
+     ▼
+validateDto()     → class-validator ile request body doğrulaması (middleware)
      │
      ▼
   Service         → Tüm iş mantığı burada yaşar
@@ -45,14 +48,29 @@ HTTP İsteği
 
 Bu yapı **Layered Architecture** olarak adlandırılır. DDD veya MVC değil — daha pragmatik bir yaklaşım. Service Layer Pattern ile Repository Pattern'in birleşimi.
 
+`validateDto(DtoClass)` middleware'i router ile service arasında konumlanır. Request body'yi `plainToInstance` ile DTO sınıfına dönüştürür, `validate` ile kontrol eder. Hata varsa service'e ulaşmadan 400 döner.
+
 ---
 
 ## Bileşenler
 
 ### API Katmanı
-Stateless, yatay olarak ölçeklenebilir. HTTP isteklerini alır, DTO'ya dönüştürür, service'e iletir.
+Stateless, yatay olarak ölçeklenebilir. HTTP isteklerini alır, `validateDto` middleware'inden geçirir, service'e iletir.
 
 Production'da Node.js Cluster modunda çalışır — her CPU çekirdeğine bir worker atanır. Bkz. [Cluster](#cluster).
+
+### Validation Katmanı
+`src/middleware/validateDto.ts` — generic middleware. `class-validator` dekoratörleriyle süslenmiş DTO sınıfları kullanır.
+
+Her domain'in kendi `dtos/` klasörü vardır:
+```
+src/auth/dtos/register.dto.ts
+src/auth/dtos/login.dto.ts
+src/projects/dtos/create-project.dto.ts
+src/apikeys/dtos/create-apikey.dto.ts
+```
+
+Validation hatası varsa service'e hiç ulaşılmaz — 400 `validation_error` döner. Service katmanı yalnızca iş mantığı kurallarını kontrol eder (örn. email zaten kayıtlı mı).
 
 ### Auth Modülü
 Platform kullanıcılarının kimlik doğrulaması. Access token (15dk, Bearer) + refresh token (7 gün, HTTP-only cookie) stratejisi. API tüketicilerini değil, Elyzor hesap sahiplerini yönetir.
@@ -157,6 +175,14 @@ Load Balancer
 **Redis çökerse:** MongoDB'ye fallback. Performans düşer, doğruluk korunur.
 
 **MongoDB çökerse:** Verification fail closed — erişim reddedilir. Asla fail open yapılmaz.
+
+---
+
+## API Dokümantasyonu
+
+`GET /docs` — Swagger UI. `src/config/swagger.ts` içinde OpenAPI 3.0 spec tanımlı.
+
+Tüm endpoint'ler, request/response şemaları ve security scheme'leri bu dosyada merkezileştirilmiştir. JSDoc annotation kullanılmaz — spec doğrudan kod olarak yönetilir.
 
 ---
 

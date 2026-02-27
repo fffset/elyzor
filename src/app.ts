@@ -1,15 +1,21 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
 import authRouter from './auth/auth.router';
 import projectsRouter from './projects/projects.router';
 import apiKeysRouter from './apikeys/apikeys.router';
 import verificationRouter from './verification/verification.router';
 import { errorHandler } from './middleware/errorHandler';
+import { swaggerOptions } from './config/swagger';
 
 const app = express();
 
 app.use(express.json());
 app.use(cookieParser());
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use('/v1/auth', authRouter);
 app.use('/v1/projects', projectsRouter);

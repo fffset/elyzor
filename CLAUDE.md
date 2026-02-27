@@ -31,6 +31,8 @@ Geri kalanını Elyzor halleder: key üretimi, hash'leme, revocation, rate limit
 | Veritabanı | MongoDB (Mongoose ile) |
 | Cache / Rate Limiting | Redis (ioredis ile) |
 | Auth (platform kullanıcıları) | JWT (jsonwebtoken) |
+| Validation | class-validator + class-transformer |
+| API Dokümantasyonu | swagger-jsdoc + swagger-ui-express |
 | Test | Jest + ts-jest |
 | Linting | ESLint + Prettier |
 | Altyapı | Docker + docker-compose |
@@ -57,9 +59,12 @@ Geri kalanını Elyzor halleder: key üretimi, hash'leme, revocation, rate limit
     "noImplicitReturns": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
   "include": ["src/**/*"],
+  "files": ["src/types/express.d.ts"],
   "exclude": ["node_modules", "dist", "tests"]
 }
 ```
@@ -67,8 +72,8 @@ Geri kalanını Elyzor halleder: key üretimi, hash'leme, revocation, rate limit
 ### Temel bağımlılıklar
 
 ```bash
-npm install express mongoose ioredis jsonwebtoken
-npm install -D typescript ts-node nodemon @types/express @types/node @types/jsonwebtoken
+npm install express mongoose ioredis jsonwebtoken bcrypt cookie-parser class-validator class-transformer swagger-jsdoc swagger-ui-express
+npm install -D typescript ts-node nodemon @types/express @types/node @types/jsonwebtoken @types/bcrypt @types/cookie-parser @types/swagger-jsdoc @types/swagger-ui-express
 ```
 
 ### Scripts (package.json)
@@ -78,7 +83,7 @@ npm install -D typescript ts-node nodemon @types/express @types/node @types/json
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node dist/cluster.js",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
     "test": "jest",
@@ -136,12 +141,15 @@ declare global {
 
 ```ts
 import { Router, Request, Response, NextFunction } from "express";
+import { validateDto } from "../middleware/validateDto";
+import { RegisterDto } from "./dtos/register.dto";
 
 const router = Router();
 
-router.post("/register", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post("/register", validateDto(RegisterDto), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const result = await authService.register(req.body);
+    const dto: RegisterDto = req.body; // validateDto geçtikten sonra güvenli
+    const result = await authService.register(dto);
     res.status(201).json(result);
   } catch (err) {
     next(err);
@@ -166,43 +174,73 @@ export const authGuard = (req: Request, res: Response, next: NextFunction): void
 
 ---
 
-## DTO Pattern
+## DTO Pattern ve Validation
 
-Her endpoint'e giren ve çıkan veri DTO (Data Transfer Object) ile tiplenir. DTO'lar `*.types.ts` içinde yaşar.
+### Request DTO'ları — class-validator sınıfları
+
+Request body'ye giren veriler `class-validator` dekoratörleriyle süslenmiş DTO **sınıfları** ile doğrulanır. Her domain kendi `dtos/` klasörüne sahiptir:
 
 ```ts
-// apikeys.types.ts
+// src/auth/dtos/register.dto.ts
+import { IsEmail, IsString, MinLength } from 'class-validator';
 
-export interface CreateApiKeyDto {
-  name: string;
-  projectId: string;
-}
+export class RegisterDto {
+  @IsEmail({}, { message: 'Geçerli bir email adresi giriniz' })
+  email!: string;
 
-export interface ApiKeyResponse {
-  id: string;
-  name: string;
-  prefix: string;       // sk_live_xxxx (sadece ilk kısım)
-  createdAt: Date;
-  revoked: boolean;
-}
-
-export interface CreatedApiKeyResponse extends ApiKeyResponse {
-  key: string;          // tam key — sadece oluşturulma anında döner
+  @IsString()
+  @MinLength(8, { message: 'Şifre en az 8 karakter olmalıdır' })
+  password!: string;
 }
 ```
 
-Router'da gelen body doğrudan service'e geçilmez — önce DTO'ya şekillendirilir:
+```ts
+// src/projects/dtos/create-project.dto.ts
+import { IsString, IsNotEmpty, MaxLength } from 'class-validator';
+
+export class CreateProjectDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Proje adı zorunludur' })
+  @MaxLength(100)
+  name!: string;
+}
+```
+
+### validateDto middleware
+
+`src/middleware/validateDto.ts` — generic middleware, her POST endpoint'inde kullanılır:
 
 ```ts
-// ✅ doğru
-const dto: CreateApiKeyDto = {
-  name: req.body.name,
-  projectId: req.params.projectId,
-};
-const result = await apiKeyService.create(dto);
+import { validateDto } from '../middleware/validateDto';
+import { RegisterDto } from './dtos/register.dto';
 
-// ❌ yanlış
-const result = await apiKeyService.create(req.body);
+router.post('/register', validateDto(RegisterDto), async (req, res, next) => {
+  const dto: RegisterDto = req.body; // zaten doğrulanmış ve dönüştürülmüş
+  const result = await authService.register(dto);
+  res.status(201).json(result);
+});
+```
+
+`whitelist: true` ile tanımsız property'ler otomatik temizlenir. Hata varsa service'e hiç ulaşılmaz — 400 döner.
+
+### Response DTO'ları — plain interface
+
+Yanıt tipleri `*.types.ts` içinde **interface** olarak kalır (doğrulama gerekmez):
+
+```ts
+// apikeys.types.ts
+export interface ApiKeyResponse {
+  id: string;
+  projectId: string;
+  publicPart: string;
+  label: string;
+  revoked: boolean;
+  createdAt: Date;
+}
+
+export interface CreatedApiKeyResponse extends ApiKeyResponse {
+  key: string; // plaintext — sadece oluşturulma anında döner
+}
 ```
 
 ---
@@ -213,20 +251,31 @@ const result = await apiKeyService.create(req.body);
 elyzor/
 ├── src/
 │   ├── auth/
+│   │   ├── dtos/
+│   │   │   ├── register.dto.ts
+│   │   │   └── login.dto.ts
+│   │   ├── services/
+│   │   │   └── token.service.ts      # generateAccessToken
 │   │   ├── auth.router.ts
 │   │   ├── auth.service.ts
 │   │   ├── auth.repository.ts        # refresh_tokens koleksiyonu
+│   │   ├── auth.model.ts
 │   │   └── auth.types.ts
 │   ├── users/
 │   │   ├── users.model.ts
+│   │   ├── users.repository.ts
 │   │   └── users.types.ts
 │   ├── projects/
+│   │   ├── dtos/
+│   │   │   └── create-project.dto.ts
 │   │   ├── projects.router.ts
 │   │   ├── projects.service.ts
 │   │   ├── projects.repository.ts
 │   │   ├── projects.model.ts
 │   │   └── projects.types.ts
 │   ├── apikeys/
+│   │   ├── dtos/
+│   │   │   └── create-apikey.dto.ts
 │   │   ├── apikeys.router.ts
 │   │   ├── apikeys.service.ts
 │   │   ├── apikeys.repository.ts
@@ -244,6 +293,7 @@ elyzor/
 │   ├── middleware/
 │   │   ├── authGuard.ts
 │   │   ├── errorHandler.ts
+│   │   ├── validateDto.ts
 │   │   └── rateLimiter.ts
 │   ├── errors/
 │   │   ├── AppError.ts
@@ -257,8 +307,11 @@ elyzor/
 │   ├── config/
 │   │   ├── db.ts
 │   │   ├── redis.ts
-│   │   └── env.ts
-│   └── index.ts
+│   │   ├── env.ts
+│   │   └── swagger.ts                # OpenAPI 3.0 spec
+│   ├── app.ts
+│   ├── index.ts
+│   └── cluster.ts                    # production entrypoint
 ├── tests/
 │   ├── unit/
 │   └── integration/
@@ -280,7 +333,10 @@ Elyzor **katmanlı mimari** kullanır. Her katmanın tek bir sorumluluğu vardı
 HTTP İsteği
      │
      ▼
-  Router          → Sadece HTTP: isteği al, DTO oluştur, response gönder
+  Router          → Sadece HTTP: isteği al, response gönder
+     │
+     ▼
+validateDto()     → class-validator ile request body doğrulaması (middleware)
      │
      ▼
   Service         → Tüm iş mantığı burada yaşar
@@ -294,8 +350,10 @@ HTTP İsteği
 
 **Katman kuralları — bunlar ihlal edilemez:**
 
-- `Router` iş mantığı içermez. Validation, hash'leme, business rule — hiçbiri router'a girmez.
+- `Router` iş mantığı içermez. Hash'leme, business rule — hiçbiri router'a girmez.
+- `validateDto` middleware'i input validation'ı halleder — service'e geçmeden önce çalışır.
 - `Service` HTTP'yi bilmez. `req`, `res`, `next` bir service metoduna asla parametre olarak geçilmez.
+- `Service` yalnızca iş mantığı kurallarını kontrol eder (örn. email zaten kayıtlı mı) — format/tip validasyonu değil.
 - `Repository` iş mantığı içermez. Sadece MongoDB sorguları çalıştırır, sonucu döndürür.
 - `Model` sadece Mongoose şemasıdır. Başka hiçbir katmanı import etmez.
 - `Types` hiçbir katmanı import etmez. Saf tip tanımlarıdır.
@@ -756,3 +814,6 @@ npm run format
 - Redis bir performans katmanıdır, source of truth değildir. Otorite MongoDB'dir.
 - Açık bir gerekçe olmadan yeni bağımlılık ekleme.
 - `any` yazarsan derleme geçse bile kabul edilmez — tip sorunu varsa düzgün çöz.
+- Yeni bir POST endpoint'i eklenince mutlaka `validateDto(DtoClass)` middleware'i de eklenir. Validation router'da middleware olarak yapılır, service içinde manuel if-check olarak değil.
+- Service katmanında yalnızca iş mantığı kontrolleri bulunur (email zaten kayıtlı mı, proje kullanıcıya ait mi vb.). Format ve tip validasyonu `validateDto`'nun işidir.
+- Swagger spec'i (`src/config/swagger.ts`) yeni endpoint eklendiğinde güncellenir. JSDoc annotation kullanılmaz.
