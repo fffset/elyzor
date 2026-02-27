@@ -1,255 +1,100 @@
-# Elyzor Architecture
+# Mimari
 
-## Purpose
+## Genel Bakış
 
-Elyzor is designed as an **API Authentication Infrastructure Service** responsible for issuing, validating, and monitoring API access credentials.
-
-The system separates authentication responsibility from application logic and provides a centralized trust authority for APIs.
-
----
-
-## Architectural Goals
-
-Elyzor is built around the following engineering principles:
-
-* Stateless verification
-* Low-latency request validation
-* Secure secret handling
-* Multi-tenant isolation
-* Horizontal scalability
-* Infrastructure simplicity (V1)
-
-The initial architecture intentionally avoids premature microservice decomposition.
-
----
-
-## System Context
-
-Elyzor operates between external clients and protected APIs.
+Elyzor, API key authentication'ı dışa alan bir servisdir. Korunan API'ler kimlik doğrulama mantığını kendileri implement etmek yerine Elyzor'a delege eder.
 
 ```
-Client Application
+İstemci Uygulaması
         │
-        │ API Request
+        │ API İsteği
         ▼
-Protected API
+  Korunan API
         │
-        │ Verification Request
+        │ POST /v1/verify
         ▼
       Elyzor
         │
-        ├── MongoDB
-        └── Redis
+        ├── MongoDB (metadata, loglar)
+        └── Redis (cache, rate limiting)
 ```
 
-Protected APIs delegate authentication decisions to Elyzor.
+**Elyzor asla uygulama trafiğini proxy'lemez.** Sadece "bu key geçerli mi?" sorusunu yanıtlar.
 
 ---
 
-## High-Level Components
+## Katman Yapısı
 
-### 1. API Layer
+Bağımlılıklar her zaman tek yönde akar:
 
-Responsible for handling incoming HTTP requests.
+```
+HTTP İsteği
+     │
+     ▼
+  Router          → Sadece HTTP: isteği al, DTO oluştur, response gönder
+     │
+     ▼
+  Service         → Tüm iş mantığı burada yaşar
+     │
+     ▼
+ Repository       → Sadece veritabanı işlemleri
+     │
+     ▼
+   Model          → Sadece Mongoose şema tanımı
+```
 
-Responsibilities:
-
-* request validation
-* authentication
-* routing
-* response normalization
-
-Characteristics:
-
-* stateless
-* horizontally scalable
-* container-ready
+Bu yapı **Layered Architecture** olarak adlandırılır. DDD veya MVC değil — daha pragmatik bir yaklaşım. Service Layer Pattern ile Repository Pattern'in birleşimi.
 
 ---
 
-### 2. Authentication Module
+## Bileşenler
 
-Handles Elyzor account authentication.
+### API Katmanı
+Stateless, yatay olarak ölçeklenebilir. HTTP isteklerini alır, DTO'ya dönüştürür, service'e iletir.
 
-Scope:
+### Auth Modülü
+Platform kullanıcılarının kimlik doğrulaması. JWT tabanlı. API tüketicilerini değil, Elyzor hesap sahiplerini yönetir.
 
-* user registration
-* login
-* JWT issuance
-* session validation
+### Project Servisi
+Tenant izolasyon katmanı. Her kullanıcı birden fazla proje sahibi olabilir. Tüm key işlemleri proje kapsamında çalışır.
 
-This layer authenticates **platform users**, not API consumers.
+### ApiKey Servisi
+Key üretimi, hash'leme, revocation. Plaintext key asla saklanmaz.
 
----
-
-### 3. Project Service
-
-Implements tenant isolation.
-
-Each user owns one or more projects.
+### Verification Servisi
+En performans-kritik bileşen. Hedef: ortalama <5ms.
 
 ```
-User → Project → API Keys
-```
-
-Responsibilities:
-
-* project ownership validation
-* tenant boundary enforcement
-* resource scoping
-
-All downstream operations require project context.
-
----
-
-### 4. API Key Service
-
-Core credential management component.
-
-Responsibilities:
-
-* secure key generation
-* hashing before persistence
-* prefix identification
-* lifecycle management
-* revocation
-
-#### Key Structure
-
-```
-sk_live_<public_part>.<secret_part>
-```
-
-Only hashed secrets are stored.
-
-Plaintext keys are shown once during creation.
-
----
-
-### 5. Verification Service (Core Engine)
-
-The most performance-critical component.
-
-Verification flow:
-
-```
-Incoming Verify Request
+POST /v1/verify
         │
-Extract API Key
+   Key'i ayıkla
         │
-Redis Lookup
+   Redis lookup
         │
- ├── Cache Hit → Validate
- └── Cache Miss → Mongo Lookup
-                     │
-                Cache Result
+  ├── Cache hit  → doğrula + rate limit kontrolü
+  └── Cache miss → MongoDB lookup → cache'e yaz
+        │
+   { valid, projectId, rateLimitRemaining }
 ```
 
-Responsibilities:
-
-* credential validation
-* revocation check
-* project resolution
-* rate limit validation
-
-Target latency:
-< 5ms average verification time.
+### Usage Servisi
+Her verification olayını asenkron kaydeder. Dashboard için veri tabanı bu servistir.
 
 ---
 
-### 6. Usage Tracking Service
-
-Records authentication events.
-
-Captured metadata:
-
-* project id
-* api key id
-* timestamp
-* ip address
-* request result
-
-Usage data enables:
-
-* analytics
-* billing foundations
-* abuse detection
-
-Logging occurs asynchronously where possible.
-
----
-
-## Data Storage Strategy
+## Veri Katmanı
 
 ### MongoDB
-
-Persistent storage.
-
-Stores:
-
-* users
-* projects
-* api keys (hashed)
-* usage logs
-
-Chosen for:
-
-* flexible schema evolution
-* rapid iteration
-* developer familiarity
-
----
+Kalıcı depolama. Kullanıcılar, projeler, API key hash'leri, usage logları burada tutulur. Source of truth.
 
 ### Redis
-
-Hot-path performance layer.
-
-Used for:
-
-* verification cache
-* revoked key cache
-* rate limiting counters
-
-Redis prevents database access on every verification request.
+Sıcak yol performans katmanı. Verification cache, revoked key cache, rate limiting sayaçları. Redis çökerse MongoDB'ye fallback yapılır — doğruluk korunur, performans düşer.
 
 ---
 
-## Request Verification Lifecycle
+## Ölçeklenme
 
-1. Client calls protected API.
-2. Protected API extracts API key.
-3. Protected API calls Elyzor `/v1/verify`.
-4. Elyzor validates credential.
-5. Elyzor returns authorization result.
-6. Protected API continues execution.
-
-Elyzor never directly proxies application traffic.
-
----
-
-## Security Model
-
-Elyzor follows a zero-trust design.
-
-Security decisions:
-
-* secrets never stored in plaintext
-* constant-time hash comparison
-* immediate revocation propagation
-* scoped project access
-* isolated tenant resources
-
-Compromise of one project does not affect others.
-
----
-
-## Scalability Model
-
-### Horizontal Scaling
-
-API layer remains stateless.
-
-Scaling strategy:
+API katmanı stateless olduğu için yatay ölçekleme yapılabilir:
 
 ```
 Load Balancer
@@ -262,65 +107,25 @@ Load Balancer
       │
  Redis Cluster
       │
- MongoDB
+  MongoDB
 ```
 
-Additional instances can be added without coordination.
+---
+
+## Hata Stratejisi
+
+**Redis çökerse:** MongoDB'ye fallback. Performans düşer, doğruluk korunur.
+
+**MongoDB çökerse:** Verification fail closed — erişim reddedilir. Asla fail open yapılmaz.
 
 ---
 
-## Failure Strategy
+## V1 Kapsam Dışı
 
-### Redis Failure
+Bunlar bilinçli olarak V1'e alınmadı:
 
-Fallback to MongoDB lookup.
-
-Performance degradation allowed.
-Correctness preserved.
-
----
-
-### Database Failure
-
-Verification requests fail closed.
-
-Access is denied rather than trusted.
-
----
-
-## Future Evolution (Post-V1)
-
-Planned architectural extensions:
-
-* verification edge nodes
-* event-driven usage pipeline
-* billing service separation
-* organization-level authorization
-* SDK-based local verification
-
-Microservices are introduced only when operational pressure justifies separation.
-
----
-
-## Non-Goals (V1)
-
-The following are intentionally excluded:
-
-* OAuth provider support
-* social login
-* enterprise SSO
-* identity federation
-* session management for end users
-
-Elyzor focuses strictly on **API authentication infrastructure**.
-
----
-
-## Architectural Philosophy
-
-Elyzor prioritizes correctness and clarity over abstraction.
-
-Authentication systems fail primarily due to complexity.
-V1 maintains a minimal surface area while preserving production realism.
-
-The architecture is designed to evolve incrementally without requiring fundamental rewrites.
+- OAuth / sosyal giriş
+- Enterprise SSO
+- Identity federation
+- Session yönetimi
+- Microservice ayrımı (operasyonel baskı oluşana kadar monolith)
