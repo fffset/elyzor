@@ -1,16 +1,9 @@
-export interface RegisterDto {
-  email: string;
-  password: string;
-}
-
-export interface LoginDto {
-  email: string;
-  password: string;
-}
-
 export interface RegisterResponse {
-  id: string;
-  email: string;
+  user: { id: string; email: string };
+  token: {
+    accessToken: string;
+    refreshToken: string;
+  }
 }
 
 export interface LoginResponse {

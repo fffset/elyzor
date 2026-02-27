@@ -1,7 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { ProjectService } from './projects.service';
 import { authGuard } from '../middleware/authGuard';
-import { CreateProjectDto } from './projects.types';
+import { validateDto } from '../middleware/validateDto';
+import { CreateProjectDto } from './dtos/create-project.dto';
 
 const router = Router();
 const projectService = new ProjectService();
@@ -17,9 +18,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction): Promise
   }
 });
 
-router.post('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/', validateDto(CreateProjectDto), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const dto: CreateProjectDto = { name: req.body.name };
+    const dto: CreateProjectDto = req.body as CreateProjectDto;
     const project = await projectService.createProject(req.userId!, dto);
     res.status(201).json(project);
   } catch (err) {

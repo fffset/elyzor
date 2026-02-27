@@ -1,6 +1,7 @@
 import { ProjectRepository } from './projects.repository';
-import { IProject, CreateProjectDto } from './projects.types';
-import { NotFoundError, ValidationError } from '../errors';
+import { IProject } from './projects.types';
+import { CreateProjectDto } from './dtos/create-project.dto';
+import { NotFoundError } from '../errors';
 
 const projectRepo = new ProjectRepository();
 
@@ -10,9 +11,6 @@ export class ProjectService {
   }
 
   async createProject(userId: string, dto: CreateProjectDto): Promise<IProject> {
-    if (!dto.name || !dto.name.trim()) {
-      throw new ValidationError('Proje adı zorunludur');
-    }
     return projectRepo.create({ userId, name: dto.name.trim() });
   }
 

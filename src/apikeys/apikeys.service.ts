@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import { ApiKeyRepository } from './apikeys.repository';
 import { ProjectService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError } from '../errors';
-import { CreateApiKeyDto, CreatedApiKeyResponse, ApiKeyResponse } from './apikeys.types';
+import { CreatedApiKeyResponse, ApiKeyResponse } from './apikeys.types';
+import { CreateApiKeyDto } from './dtos/create-apikey.dto';
 
 const apiKeyRepo = new ApiKeyRepository();
 const projectService = new ProjectService();

@@ -7,7 +7,3 @@ export interface IProject extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
-
-export interface CreateProjectDto {
-  name: string;
-}

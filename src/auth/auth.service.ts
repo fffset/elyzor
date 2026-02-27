@@ -6,13 +6,10 @@ import { AuthRepository } from './auth.repository';
 import { UnauthorizedError, ValidationError } from '../errors';
 import { env } from '../config/env';
 import redis from '../config/redis';
-import {
-  RegisterDto,
-  LoginDto,
-  RegisterResponse,
-  LoginResponse,
-  RefreshResponse,
-} from './auth.types';
+import { RegisterDto } from './dtos/register.dto';
+import { LoginDto } from './dtos/login.dto';
+import { generateAccessToken } from './services/token.service';
+import { RegisterResponse, LoginResponse, RefreshResponse } from './auth.types';
 
 const userRepo = new UserRepository();
 const authRepo = new AuthRepository();
@@ -28,15 +25,30 @@ function blacklistKey(token: string): string {
   return `blacklist:${token}`;
 }
 
+async function issueRefreshToken(userId: string): Promise<string> {
+  const refreshToken = crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
+  const tokenHash = hashToken(refreshToken);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await authRepo.createRefreshToken({ userId, tokenHash, expiresAt });
+  return refreshToken;
+}
+
+async function blacklistAccessToken(accessToken: string): Promise<void> {
+  try {
+    const decoded = jwt.decode(accessToken) as { exp?: number } | null;
+    if (decoded?.exp) {
+      const ttl = decoded.exp - Math.floor(Date.now() / 1000);
+      if (ttl > 0) {
+        await redis.setex(blacklistKey(accessToken), ttl, '1');
+      }
+    }
+  } catch {
+    // token decode edilemese bile devam et
+  }
+}
+
 export class AuthService {
   async register(dto: RegisterDto): Promise<RegisterResponse> {
-    if (!dto.email || !dto.password) {
-      throw new ValidationError('Email ve şifre zorunludur');
-    }
-    if (dto.password.length < 8) {
-      throw new ValidationError('Şifre en az 8 karakter olmalıdır');
-    }
-
     const existing = await userRepo.findByEmail(dto.email);
     if (existing) {
       throw new ValidationError('Bu email zaten kullanımda');
@@ -45,14 +57,14 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.password, env.bcryptRounds);
     const user = await userRepo.create({ email: dto.email, passwordHash });
 
-    return { id: user._id.toString(), email: user.email };
+    const userId = user._id.toString();
+    const accessToken = generateAccessToken({ id: userId, email: user.email });
+    const refreshToken = await issueRefreshToken(userId);
+
+    return { user: { id: userId, email: user.email }, token: { accessToken, refreshToken } };
   }
 
   async login(dto: LoginDto): Promise<{ response: LoginResponse; refreshToken: string }> {
-    if (!dto.email || !dto.password) {
-      throw new ValidationError('Email ve şifre zorunludur');
-    }
-
     const user = await userRepo.findByEmail(dto.email);
     if (!user) {
       throw new UnauthorizedError('Geçersiz email veya şifre');
@@ -63,17 +75,8 @@ export class AuthService {
       throw new UnauthorizedError('Geçersiz email veya şifre');
     }
 
-    const accessToken = jwt.sign(
-      { userId: user._id.toString(), email: user.email },
-      env.jwt.secret,
-      { expiresIn: env.jwt.accessExpiresIn }
-    );
-
-    const refreshToken = crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
-    const tokenHash = hashToken(refreshToken);
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    await authRepo.createRefreshToken({ userId: user._id.toString(), tokenHash, expiresAt });
+    const accessToken = generateAccessToken({ id: user._id.toString(), email: user.email });
+    const refreshToken = await issueRefreshToken(user._id.toString());
 
     return { response: { accessToken }, refreshToken };
   }
@@ -85,7 +88,6 @@ export class AuthService {
 
     const tokenHash = hashToken(rawRefreshToken);
 
-    // Redis cache'e bak, yoksa MongoDB'ye git
     const cacheKey = `refresh:${tokenHash}`;
     let userId: string | null = await redis.get(cacheKey);
 
@@ -104,30 +106,14 @@ export class AuthService {
       throw new UnauthorizedError('Kullanıcı bulunamadı');
     }
 
-    const accessToken = jwt.sign(
-      { userId: user._id.toString(), email: user.email },
-      env.jwt.secret,
-      { expiresIn: env.jwt.accessExpiresIn }
-    );
+    const accessToken = generateAccessToken({ id: user._id.toString(), email: user.email });
 
     return { accessToken };
   }
 
   async logout(accessToken: string, rawRefreshToken: string | undefined): Promise<void> {
-    // Access token'ı blacklist'e ekle (kalan TTL kadar)
-    try {
-      const decoded = jwt.decode(accessToken) as { exp?: number } | null;
-      if (decoded?.exp) {
-        const ttl = decoded.exp - Math.floor(Date.now() / 1000);
-        if (ttl > 0) {
-          await redis.setex(blacklistKey(accessToken), ttl, '1');
-        }
-      }
-    } catch {
-      // token decode edilemese bile devam et
-    }
+    await blacklistAccessToken(accessToken);
 
-    // Refresh token'ı iptal et
     if (rawRefreshToken) {
       const tokenHash = hashToken(rawRefreshToken);
       await authRepo.revokeRefreshToken(tokenHash);
@@ -136,20 +122,7 @@ export class AuthService {
   }
 
   async logoutAll(userId: string, accessToken: string): Promise<void> {
-    // Mevcut access token'ı blacklist'e ekle
-    try {
-      const decoded = jwt.decode(accessToken) as { exp?: number } | null;
-      if (decoded?.exp) {
-        const ttl = decoded.exp - Math.floor(Date.now() / 1000);
-        if (ttl > 0) {
-          await redis.setex(blacklistKey(accessToken), ttl, '1');
-        }
-      }
-    } catch {
-      // token decode edilemese bile devam et
-    }
-
-    // Tüm refresh token'ları iptal et
+    await blacklistAccessToken(accessToken);
     await authRepo.revokeAllUserTokens(userId);
   }
 }

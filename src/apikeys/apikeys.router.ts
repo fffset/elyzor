@@ -1,7 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { ApiKeyService } from './apikeys.service';
 import { authGuard } from '../middleware/authGuard';
-import { CreateApiKeyDto } from './apikeys.types';
+import { validateDto } from '../middleware/validateDto';
+import { CreateApiKeyDto } from './dtos/create-apikey.dto';
 
 const router = Router({ mergeParams: true });
 const apiKeyService = new ApiKeyService();
@@ -17,9 +18,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction): Promise
   }
 });
 
-router.post('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/', validateDto(CreateApiKeyDto), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const dto: CreateApiKeyDto = { label: req.body.label };
+    const dto: CreateApiKeyDto = req.body as CreateApiKeyDto;
     const result = await apiKeyService.createKey(req.userId!, req.params.projectId, dto);
     res.status(201).json(result);
   } catch (err) {

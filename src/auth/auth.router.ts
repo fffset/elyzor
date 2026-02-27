@@ -1,7 +1,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthService, REFRESH_COOKIE } from './auth.service';
 import { authGuard } from '../middleware/authGuard';
-import { RegisterDto, LoginDto } from './auth.types';
+import { validateDto } from '../middleware/validateDto';
+import { RegisterDto } from './dtos/register.dto';
+import { LoginDto } from './dtos/login.dto';
 
 const router = Router();
 const authService = new AuthService();
@@ -13,17 +15,18 @@ const COOKIE_OPTIONS = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
-router.post('/register', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/register', validateDto(RegisterDto), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const dto: RegisterDto = { email: req.body.email, password: req.body.password };
-    const result = await authService.register(dto);
-    res.status(201).json(result);
+    const dto: RegisterDto = req.body as RegisterDto;
+    const { user, token } = await authService.register(dto);
+    res.cookie(REFRESH_COOKIE, token.refreshToken, COOKIE_OPTIONS);
+    res.status(201).json({ user, token });
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/login', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/login', validateDto(LoginDto), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const dto: LoginDto = { email: req.body.email, password: req.body.password };
     const { response, refreshToken } = await authService.login(dto);

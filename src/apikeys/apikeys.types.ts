@@ -11,10 +11,6 @@ export interface IApiKey extends Document {
   updatedAt: Date;
 }
 
-export interface CreateApiKeyDto {
-  label?: string;
-}
-
 export interface ApiKeyResponse {
   id: string;
   projectId: string;
