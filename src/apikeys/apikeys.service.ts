@@ -4,6 +4,7 @@ import { ProjectService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError } from '../errors';
 import { CreatedApiKeyResponse, ApiKeyResponse } from './apikeys.types';
 import { CreateApiKeyDto } from './dtos/create-apikey.dto';
+import redis from '../config/redis';
 
 const apiKeyRepo = new ApiKeyRepository();
 const projectService = new ProjectService();
@@ -33,7 +34,11 @@ export class ApiKeyService {
     }));
   }
 
-  async createKey(userId: string, projectId: string, dto: CreateApiKeyDto): Promise<CreatedApiKeyResponse> {
+  async createKey(
+    userId: string,
+    projectId: string,
+    dto: CreateApiKeyDto
+  ): Promise<CreatedApiKeyResponse> {
     await projectService.assertOwnership(userId, projectId);
 
     const { publicPart, secretPart, fullKey } = this.generateKey();
@@ -69,5 +74,8 @@ export class ApiKeyService {
     }
 
     await apiKeyRepo.revoke(keyId, projectId);
+
+    // Anlık revocation: verification cache'ini temizle
+    await redis.del(`apikey:${key.secretHash}`);
   }
 }

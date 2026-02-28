@@ -205,8 +205,7 @@ elyzor/
 ├── docs/
 │   ├── architecture.md
 │   ├── security.md
-│   ├── decisions.md
-│   └── api-spec.md
+│   └── decisions.md
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -236,6 +235,26 @@ elyzor/
 - [ ] Key rotation
 - [ ] Webhook events
 - [ ] SDK support (Node, Python, Go)
+
+---
+
+## Testing
+
+```bash
+# Unit tests (no Docker required)
+npm run test:unit
+
+# Unit tests with coverage report
+npm run test:unit -- --coverage
+
+# Integration tests (requires Docker)
+docker compose up -d
+npm run test:integration
+```
+
+**Unit tests** mock Redis and MongoDB — no external dependencies. Coverage is enforced at push time via Husky: 80% statements/lines, 75% branches/functions.
+
+**Integration tests** run against real services and must run serially (`--runInBand`) to avoid database state conflicts between suites.
 
 ---
 

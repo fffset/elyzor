@@ -303,16 +303,16 @@ Rotation ile:
 
 ---
 
-## 021 — Üretim ortamında zorunlu env değişkenleri startup'ta doğrulanır
+## 021 — Zorunlu env değişkenleri startup'ta doğrulanır (ortamdan bağımsız)
 
-**Karar:** `src/config/env.ts` içinde `requireInProduction()` fonksiyonu, `NODE_ENV=production` ortamında `JWT_SECRET`, `MONGO_URI`, `REDIS_URL`'in eksikliğinde uygulama başlamadan hata fırlatır.
+**Karar:** `src/config/env.ts` içinde `requireEnv()` fonksiyonu, tüm ortamlarda (dev dahil) zorunlu env değişkeni eksikse uygulama başlamadan hata fırlatır. Hardcoded fallback yoktur — tüm değerler `.env` dosyasından okunur.
 
 **Gerekçe:**
-Eksik env değişkeni ilk isteğe kadar fark edilmez ve production'da gizli bir güvenlik açığı bırakır (örn. `JWT_SECRET` olmadan varsayılan değerle çalışmak — herkes token forge edebilir). Hızlı-fail prensibi: sorun ne kadar erken yakalanırsa zarar o kadar azdır.
+Eski implementasyon dev ortamında `dev_secret_change_in_production` gibi hardcoded fallback'lere izin veriyordu. Bu `.env` dosyası olmadan da uygulamanın sessizce yanlış config ile çalışmasına yol açıyordu. `.env` zorunlu hale getirilince bu risk ortadan kalkar — hangi ortamda çalışıldığına bakılmaksızın eksik değer anında görülür.
 
-**Uygulama:** Dev ortamında güvenli fallback'ler (`dev_secret_change_in_production`, `localhost:27017`) kalır. Production ortamında bu fallback'ler hata fırlatır.
+**Uygulama:** `requireEnv(key)` — değer yoksa `Missing required environment variable: KEY` hatasıyla process crash eder. `PORT` için `|| 3000` fallback kalır (kritik değil, dinleme portu).
 
-**Trade-off:** Yanlış `NODE_ENV` ile prod config'ini test etmek mümkün olmaz. Bu bir feature, bug değil.
+**Trade-off:** `.env` dosyası olmadan uygulama hiç başlamaz. Bu bir feature — `.env.example` template'inden kopyalanması beklenir.
 
 ---
 
@@ -368,3 +368,32 @@ Alice'in doğrudan Elyzor'a erişmesi tasarım gereği engellenmektedir. XYZ Bac
 İki ayrı koleksiyon (`platform_refresh_tokens`, `project_refresh_tokens`) `revokeAllUserTokens` gibi cross-cutting işlemleri karmaşıklaştırır. `userType` field'ı ile tek koleksiyon yeterlidir; gelecekte gerekirse koleksiyona ayrılabilir.
 
 **Trade-off:** Project user'ların kendi başlarına Elyzor'a login olamaması bir kısıtlamadır. V2'de Organizations feature ile daha esnek rol tabanlı erişim modeli düşünülebilir.
+
+---
+
+## 025 — Husky ile commit/push hook'ları ve coverage threshold
+
+**Karar:**
+- `pre-commit`: Sadece staged `.ts` dosyalarına `lint-staged` çalıştırır (ESLint fix + Prettier).
+- `pre-push`: `npm run test:unit -- --coverage` çalıştırır. Coverage threshold'u karşılamayan push reddedilir.
+- Coverage threshold: **%80 statements/lines, %75 branches/functions** — global seviyede.
+
+**Coverage scope:**
+Threshold yalnızca anlamlı dosyalara uygulanır. Şunlar exclude edilir:
+- Entrypoint/infra: `index.ts`, `cluster.ts`, `app.ts`, `config/db.ts`, `config/swagger.ts`
+- Router dosyaları: integration testlerinde kapsamlanır, unit test sayılmaz
+- Repository dosyaları: ince DB wrapper'ları, integration testlerinde kapsamlanır
+- DTO sınıfları: dekoratör tabanlı, davranış içermez
+
+**Gerekçe:**
+
+*Neden pre-commit'te testler değil, pre-push'ta?*
+Commit hızlı ve sık olmalıdır. Her commit'te tüm testleri çalıştırmak geliştirme akışını yavaşlatır. Lint ve format otomatik düzeltilebilir sorunlar — commit öncesi yapmak mantıklı. Testler push öncesi çalışır: remote'a gitmeden önce son kalite kapısı.
+
+*Neden integration testler pre-push'a dahil değil?*
+Integration testler Docker gerektiriyor — MongoDB ve Redis servisleri çalışıyor olmalı. Bu her geliştirici ortamında garanti edilemez. Integration test koruması CI/CD pipeline'da (örn. GitHub Actions) sağlanmalıdır.
+
+*Neden %80/%75?*
+Güvenlik-kritik bir servis için %70 çok düşük, %90 bu projenin router/config katmanlarını da kapsayı zorunda bırakır ve gerçekçi değil. Service katmanı zaten %95+ kapsamda — exclude edilen dosyalar düşürüyor. %80/%75 hem ulaşılabilir hem zorlamacı bir eşik.
+
+**Trade-off:** `--no-verify` ile hook'lar atlanabilir. Bu bir developer deneyimi kararı — zorla engellemek mümkün değil. Gerçek güvence CI'da sağlanır.

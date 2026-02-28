@@ -35,6 +35,7 @@ Geri kalanını Elyzor halleder: key üretimi, hash'leme, revocation, rate limit
 | API Dokümantasyonu | swagger-jsdoc + swagger-ui-express |
 | Test | Jest + ts-jest |
 | Linting | ESLint + Prettier |
+| Git Hooks | Husky + lint-staged |
 | Altyapı | Docker + docker-compose |
 
 ---
@@ -88,7 +89,7 @@ npm install -D typescript ts-node nodemon @types/express @types/node @types/json
     "format": "prettier --write src/**/*.ts",
     "test": "jest",
     "test:unit": "jest tests/unit",
-    "test:integration": "jest tests/integration"
+    "test:integration": "jest tests/integration --runInBand"
   }
 }
 ```
@@ -751,35 +752,35 @@ Env değişkenleri `src/config/env.ts` üzerinden okunur — kod içinde `proces
 
 ```ts
 // config/env.ts
-// Production'da zorunlu env değişkenleri eksikse uygulama başlamaz
-function requireInProduction(key: string, fallback: string): string {
+// Zorunlu env değişkenleri eksikse uygulama başlamaz (ortamdan bağımsız)
+function requireEnv(key: string): string {
   const value = process.env[key];
-  if (!value && process.env.NODE_ENV === 'production') {
-    throw new Error(`${key} environment variable is required in production`);
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${key}`);
   }
-  return value ?? fallback;
+  return value;
 }
 
 export const env = {
   port: Number(process.env.PORT) || 3000,
-  mongoUri: requireInProduction('MONGO_URI', 'mongodb://localhost:27017/elyzor'),
-  redisUrl: requireInProduction('REDIS_URL', 'redis://localhost:6379'),
+  mongoUri: requireEnv('MONGO_URI'),
+  redisUrl: requireEnv('REDIS_URL'),
   jwt: {
-    secret: requireInProduction('JWT_SECRET', 'dev_secret_change_in_production'),
-    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
-    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
+    secret: requireEnv('JWT_SECRET'),
+    accessExpiresIn: requireEnv('JWT_ACCESS_EXPIRES_IN') as SignOptions['expiresIn'],
+    refreshExpiresIn: requireEnv('JWT_REFRESH_EXPIRES_IN') as SignOptions['expiresIn'],
   },
   rateLimit: {
     ip: {
-      max: Number(process.env.RATE_LIMIT_IP_MAX) || 60,
-      windowSeconds: Number(process.env.RATE_LIMIT_IP_WINDOW_SECONDS) || 60,
+      max: Number(requireEnv('RATE_LIMIT_IP_MAX')),
+      windowSeconds: Number(requireEnv('RATE_LIMIT_IP_WINDOW_SECONDS')),
     },
     key: {
-      max: Number(process.env.RATE_LIMIT_KEY_MAX) || 100,
-      windowSeconds: Number(process.env.RATE_LIMIT_KEY_WINDOW_SECONDS) || 60,
+      max: Number(requireEnv('RATE_LIMIT_KEY_MAX')),
+      windowSeconds: Number(requireEnv('RATE_LIMIT_KEY_WINDOW_SECONDS')),
     },
   },
-  bcryptRounds: Number(process.env.BCRYPT_ROUNDS) || 12,
+  bcryptRounds: Number(requireEnv('BCRYPT_ROUNDS')),
 };
 ```
 
@@ -803,18 +804,25 @@ npm run dev
 ## Test
 
 ```bash
-npm test                    # tüm testleri çalıştır
-npm run test:unit           # sadece unit testler
-npm run test:integration    # integration testler (Docker gerektirir)
+npm run test:unit                    # unit testler (Docker gerekmez)
+npm run test:unit -- --coverage      # unit testler + coverage raporu
+npm run test:integration             # integration testler (Docker gerektirir, --runInBand)
 ```
 
 **Test kuralları:**
 - Unit testler Redis ve MongoDB'yi mock'lar
-- Integration testler gerçek Docker servislerini kullanır
+- Integration testler gerçek Docker servislerini kullanır; `--runInBand` ile serially koşar
 - Her service metodunun karşılığında bir unit test bulunur
 - Verification akışının uçtan uca integration coverage'ı olur
 - Implementation detaylarını değil, davranışı test et
 - `ts-jest` kullanılır — test dosyaları da `.ts` uzantılıdır
+
+**Husky hook'ları:**
+- `pre-commit` → `lint-staged`: staged `.ts` dosyalarına ESLint fix + Prettier (otomatik düzeltir)
+- `pre-push` → unit testler + coverage: global eşik %80 statements/lines, %75 branches/functions
+
+**Coverage scope** (`jest.config.js` → `collectCoverageFrom`):
+Router, repository, DTO ve infra dosyaları threshold kapsamı dışındadır — bunlar integration testlerinde kapsamlanır. Threshold service, guard ve middleware gibi iş mantığı içeren dosyalara uygulanır.
 
 ### Unit Test Mock Pattern
 

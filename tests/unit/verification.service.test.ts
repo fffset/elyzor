@@ -35,11 +35,17 @@ const usageSvc = (UsageService as jest.MockedClass<typeof UsageService>).mock.in
 
 describe('VerificationService', () => {
   let service: VerificationService;
+  let consoleErrorSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     service = new VerificationService();
     usageSvc.log.mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
   });
 
   // ── Format hatalari ──────────────────────────────────────────────────────────
