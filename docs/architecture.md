@@ -214,6 +214,53 @@ Tüm endpoint'ler, request/response şemaları ve security scheme'leri bu dosyad
 
 ---
 
+## Test Stratejisi
+
+```
+tests/
+├── unit/           # Servis mantığı — Redis ve MongoDB mock'lanır, Docker gerekmez
+└── integration/    # Uçtan uca akışlar — gerçek Docker servisleri gerektirir
+    └── helpers/
+        └── db.ts   # setupIntegration / teardownIntegration / clearCollections
+```
+
+### Unit Testler
+
+Her service metodunun karşılığında bir test bulunur. Repository ve Redis mock'lanır — gerçek DB bağlantısı yoktur. `ts-jest` ile `.ts` uzantılı dosyalar doğrudan çalıştırılır.
+
+**Coverage:** Unit test koşusunda ölçülür. Global eşik: %80 statements/lines, %75 branches/functions. Threshold yalnızca service, guard, middleware ve config gibi anlamlı dosyalara uygulanır; router, repository, DTO ve infra dosyaları exclude edilir.
+
+```bash
+npm run test:unit             # testler
+npm run test:unit -- --coverage  # testler + coverage raporu
+```
+
+### Integration Testler
+
+Gerçek MongoDB ve Redis ile çalışır — Docker Compose gerektirir. Her test suite kendi `beforeAll`/`afterAll` döngüsüne sahiptir; `beforeEach` ile koleksiyonlar ve Redis temizlenir.
+
+**Serializasyon (`--runInBand`):** Jest integration suite'lerini paralel çalıştırırsa farklı suite'lerin `clearCollections()` çağrıları birbirinin verisini siler. `test:integration` scripti `--runInBand` ile zorunlu olarak serially çalışır.
+
+```bash
+docker compose up -d          # MongoDB + Redis başlat
+npm run test:integration      # tüm integration testler (sırayla)
+```
+
+### CI/CD
+
+Integration testler `pre-push` hook'una dahil **değildir** — Docker gerektirdiğinden her ortamda çalışması garanti edilemez. CI pipeline'ında (örn. GitHub Actions) koşturulmalıdır. Unit testler ve coverage ise `pre-push` hook'unda koşar.
+
+### Husky Hook'ları
+
+| Hook | Tetikleyici | Eylem |
+|---|---|---|
+| `pre-commit` | `git commit` | `lint-staged` — staged `.ts` dosyalarına ESLint fix + Prettier |
+| `pre-push` | `git push` | Unit testler + coverage threshold kontrolü |
+
+Bkz. [Karar 025](decisions.md#025--husky-ile-commitpush-hookları-ve-coverage-threshold).
+
+---
+
 ## V1 Kapsam Dışı
 
 Bunlar bilinçli olarak V1'e alınmadı:
