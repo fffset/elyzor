@@ -228,3 +228,42 @@ JSDoc annotation'lar router dosyalarına dağılır, büyük yorum blokları kod
 `swagger-jsdoc` spec'i derlemek için kullanılır; `swagger-ui-express` UI'ı sunmak için. Spec'in kod olarak tanımlanması onu versiyon kontrolüne dahil eder ve CI'da lint edilebilir hale getirir.
 
 **Trade-off:** Router dosyasını değiştirince spec dosyasını da güncellemek gerekir — otomatik sync yok. Bu bilinçli bir tercih: spec'in kasıtlı olarak yazılması, gereksiz endpoint'lerin belgelenmesini önler.
+
+---
+
+## 018 — Unit testlerde mock instance'ı modül seviyesinde yakalanır
+
+**Karar:** Service unit testlerinde repository mock instance'ı `jest.mock()` çağrısından hemen sonra, `describe()` bloğunun dışında `instances[0]` ile yakalanır. `beforeEach` içinde yakalanmaz.
+
+**Gerekçe:**
+
+Tüm service'ler repository'lerini modül yüklenirken oluşturur:
+
+```ts
+const projectRepo = new ProjectRepository(); // ← new ProjectService() değil, modül load'da
+```
+
+`jest.clearAllMocks()` hem çağrı geçmişini hem `.mock.instances` dizisini sıfırlar. Eğer instance `beforeEach` içinde `instances[instances.length - 1]` ile yakalanırsa, `clearAllMocks()` sonrası `instances` boş olduğundan `undefined` döner ve tüm testler patlar.
+
+Çözüm: Instance modül yüklenince bir kez oluşur → `instances[0]` kalıcıdır → modül seviyesinde bir kez yakalanır:
+
+```ts
+jest.mock('../../src/projects/projects.repository');
+
+const repo = (ProjectRepository as jest.MockedClass<typeof ProjectRepository>)
+  .mock.instances[0] as jest.Mocked<ProjectRepository>;
+
+describe('...', () => {
+  beforeEach(() => {
+    jest.clearAllMocks(); // artık sorun yok — repo referansımız sabit
+  });
+});
+```
+
+**İkincil kural — jest.mock factory hoisting:**
+
+`jest.mock()` Babel/ts-jest tarafından dosyanın en üstüne hoist edilir. Factory içinde dışarıdaki `const mockFn = jest.fn()` değişkenine referans vermek `ReferenceError: Cannot access before initialization` hatasına yol açar. Çözüm: factory'siz auto-mock + `instances[0]`.
+
+**İstisna:** `redis` gibi default export'lu modüller için factory kullanmak gerekir — bu kabul edilebilir çünkü bu modüller service içinde sınıf değil, nesne olarak kullanılır.
+
+**Trade-off:** Bu pattern service'lerin modül-seviyesi singleton kullandığını varsayar. İleride service'ler constructor DI'a geçerse (örn. `new ProjectService(repo)`) bu pattern değişecektir — o zaman `beforeEach` içinde `new Service(mockRepo)` ile doğrudan geçmek daha temiz olur.

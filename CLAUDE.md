@@ -783,6 +783,83 @@ npm run test:integration    # integration testler (Docker gerektirir)
 - Implementation detaylarını değil, davranışı test et
 - `ts-jest` kullanılır — test dosyaları da `.ts` uzantılıdır
 
+### Unit Test Mock Pattern
+
+Bu projede tüm service'ler repository'lerini **modül yüklenirken** oluşturur:
+
+```ts
+// projects.service.ts
+const projectRepo = new ProjectRepository(); // ← modül load'da, new ProjectService()'de değil
+```
+
+Bu nedenle Jest'te **`instances[0]` modül seviyesinde yakalanmalıdır** — `beforeEach` içinde değil.
+
+```ts
+// ✅ DOĞRU
+jest.mock('../../src/projects/projects.repository');
+
+// jest.mock() çağrısından hemen sonra, describe() bloğunun dışında yakala
+const repo = (ProjectRepository as jest.MockedClass<typeof ProjectRepository>)
+  .mock.instances[0] as jest.Mocked<ProjectRepository>;
+
+describe('ProjectService', () => {
+  beforeEach(() => {
+    jest.clearAllMocks(); // clearAllMocks instances'ı temizler ama repo referansımız zaten sabit
+    service = new ProjectService();
+  });
+
+  it('...', async () => {
+    repo.findAllByUser.mockResolvedValue([mockProject] as never);
+    // ...
+  });
+});
+```
+
+```ts
+// ❌ YANLIŞ — instances her test sonrası clearAllMocks tarafından temizlenir
+beforeEach(() => {
+  jest.clearAllMocks();
+  service = new ProjectService();
+  const instances = (ProjectRepository as jest.MockedClass<typeof ProjectRepository>).mock.instances;
+  repo = instances[instances.length - 1]; // undefined! clearAllMocks instances'ı temizledi
+});
+```
+
+**Neden:** `jest.clearAllMocks()` hem mock çağrı geçmişini hem de `.mock.instances` dizisini sıfırlar. Ama `new ProjectService()` yeni bir repository oluşturmaz — repo `const projectRepo = new ProjectRepository()` ile modül yüklenirken zaten bir kez oluşturulmuştur. Dolayısıyla `instances[0]` herzaman doğru referanstır ve modül seviyesinde bir kez yakalanmalıdır.
+
+**jest.mock factory'sinde dışarıdaki değişkene referans verme:**
+
+```ts
+// ❌ YANLIŞ — jest.mock() Babel/ts-jest tarafından dosyanın en üstüne hoist edilir
+// Bu yüzden const mockFn henüz initialize olmamış olur → ReferenceError
+const mockFn = jest.fn();
+jest.mock('../../src/foo/foo.repository', () => ({
+  FooRepository: jest.fn().mockImplementation(() => ({
+    findById: mockFn, // ReferenceError: Cannot access 'mockFn' before initialization
+  })),
+}));
+
+// ✅ DOĞRU — factory'siz auto-mock kullan, instances[0]'dan al
+jest.mock('../../src/foo/foo.repository');
+const repo = (FooRepository as jest.MockedClass<typeof FooRepository>)
+  .mock.instances[0] as jest.Mocked<FooRepository>;
+```
+
+**Redis gibi named export olmayan modüller** için factory kullanmak gerekir, bu kabul edilebilir:
+
+```ts
+jest.mock('../../src/config/redis', () => ({
+  __esModule: true,
+  default: { get: jest.fn(), setex: jest.fn(), del: jest.fn() },
+}));
+```
+
+**Mock dönüş değerlerinde TypeScript tip uyuşmazlığı** için `as never` kullan:
+
+```ts
+repo.findById.mockResolvedValue(mockUser as never); // ✅
+```
+
 ---
 
 ## Kod Stili
