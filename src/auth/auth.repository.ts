@@ -5,6 +5,7 @@ export class AuthRepository {
     userId: string;
     tokenHash: string;
     expiresAt: Date;
+    userType?: 'platform' | 'project';
   }): Promise<IRefreshToken> {
     return RefreshTokenModel.create(data);
   }

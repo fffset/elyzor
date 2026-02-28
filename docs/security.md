@@ -36,6 +36,20 @@ Key revocation **anlıktır.** Revoke edilen key Redis cache'inden temizlenir, b
 
 ## Kimlik Doğrulama
 
+### Token Tipi İzolasyonu (userType)
+
+JWT payload'ında `userType` claim'i zorunludur:
+
+```
+Platform token: { userId, email, userType: 'platform', tokenType: 'access' }
+Project token:  { userId, email, userType: 'project',  projectId, tokenType: 'access' }
+```
+
+`platformGuard` → `userType !== 'platform'` ise 401 — project token ile platform endpoint'ine erişilemez.
+`projectGuard` → `userType !== 'project'` veya `projectId` eksikse 401 — platform token ile project endpoint'ine erişilemez.
+
+Bu izolasyon kritik bir güvenlik sınırıdır: XYZ'nin son kullanıcısı (alice), platform yönetim API'sine erişemez.
+
 ### Platform Kullanıcıları (JWT)
 
 Proje ve key yönetimi için iki katmanlı JWT stratejisi:

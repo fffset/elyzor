@@ -73,9 +73,37 @@ src/apikeys/dtos/create-apikey.dto.ts
 Validation hatası varsa service'e hiç ulaşılmaz — 400 `validation_error` döner. Service katmanı yalnızca iş mantığı kurallarını kontrol eder (örn. email zaten kayıtlı mı).
 
 ### Auth Modülü
-Platform kullanıcılarının kimlik doğrulaması. Access token (15dk, Bearer) + refresh token (7 gün, HTTP-only cookie) stratejisi. API tüketicilerini değil, Elyzor hesap sahiplerini yönetir.
+İki ayrı kullanıcı tipi için ayrı auth akışları:
 
-Refresh token'lar MongoDB'de SHA-256 hash olarak saklanır, Redis'te cache'lenir. Logout'ta access token Redis blacklist'e eklenir.
+**Platform User** (Elyzor müşterisi — örn. xyz.com kurucusu)
+- `/v1/auth/*` endpoint'leri ile kayıt/giriş
+- JWT payload: `{ userId, email, userType: 'platform', tokenType: 'access' }`
+- `platformGuard` ile korunan tüm yönetim endpoint'lerine erişir
+
+**Project User** (Platform kullanıcısının yönettiği son kullanıcılar — örn. alice)
+- `/v1/projects/:projectId/auth/*` endpoint'leri
+- Alice doğrudan Elyzor'a gelmez — XYZ Backend platform JWT ile proxy atar
+- JWT payload: `{ userId, email, userType: 'project', projectId, tokenType: 'access' }`
+- `projectGuard` ile korunan endpoint'lere erişir
+
+Refresh token'lar tek `refresh_tokens` koleksiyonunda `userType` field'ı ile ayrıştırılır. Logout'ta access token Redis blacklist'e eklenir.
+
+### Guard Yapısı
+
+| Middleware | Kabul | Reddeder |
+|---|---|---|
+| `platformGuard` | `userType: 'platform'` | `userType: 'project'` veya eksik |
+| `projectGuard` | `userType: 'project'` + `projectId` | `userType: 'platform'` veya `projectId` eksik |
+| `authGuard` | `platformGuard`'a alias — geriye dönük uyumluluk | — |
+
+İki guard birbirinin endpoint'ine erişemez. Bu, platform user'ın project user endpoint'lerini ve vice versa kullanmasını engeller.
+
+### Project Users Modülü
+`src/project-users/` — Platform kullanıcısının kendi projesine eklediği son kullanıcıları yönetir.
+
+- Ayrı `ProjectUser` koleksiyonu (`{ projectId, email, passwordHash }`)
+- `{ projectId, email }` compound unique index — aynı email farklı projelere kayıt olabilir
+- Sahiplik kontrolü: her işlem öncesinde platform user'ın o projeye sahip olduğu `assertOwnership` ile doğrulanır
 
 ### Project Servisi
 Tenant izolasyon katmanı. Her kullanıcı birden fazla proje sahibi olabilir. Tüm key işlemleri proje kapsamında çalışır.

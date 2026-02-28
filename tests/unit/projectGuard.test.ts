@@ -14,7 +14,7 @@ jest.mock('../../src/config/env', () => ({
   },
 }));
 
-import { authGuard } from '../../src/middleware/authGuard';
+import { projectGuard } from '../../src/middleware/projectGuard';
 
 const mockRedis = redis as jest.Mocked<typeof redis>;
 
@@ -30,7 +30,7 @@ function mockRes(): Response {
   return {} as Response;
 }
 
-describe('authGuard', () => {
+describe('projectGuard', () => {
   let next: jest.MockedFunction<NextFunction>;
 
   beforeEach(() => {
@@ -39,59 +39,78 @@ describe('authGuard', () => {
   });
 
   it('Authorization header yoksa UnauthorizedError iletir', () => {
-    authGuard(mockReq(undefined), mockRes(), next);
+    projectGuard(mockReq(undefined), mockRes(), next);
     expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
   });
 
   it('Bearer formati yanlissa UnauthorizedError iletir', () => {
-    authGuard(mockReq('Basic abc123'), mockRes(), next);
+    projectGuard(mockReq('Basic abc123'), mockRes(), next);
     expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
   });
 
   it('gecersiz token imzasiyla UnauthorizedError iletir', () => {
-    const token = makeToken({ userId: 'u1', email: 'test@test.com' }, 'wrong_secret');
-    authGuard(mockReq(`Bearer ${token}`), mockRes(), next);
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'project', projectId: 'proj1' }, 'wrong_secret');
+    projectGuard(mockReq(`Bearer ${token}`), mockRes(), next);
     expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
     expect(mockRedis.get).not.toHaveBeenCalled();
   });
 
-  it('none algoritmasiyla imzalanmis token reddedilir (algorithm confusion)', () => {
-    // Manuel olarak "none" algoritmali token olustur
-    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ userId: 'u1', email: 'x@x.com', exp: Math.floor(Date.now() / 1000) + 900 })).toString('base64url');
-    const noneToken = `${header}.${payload}.`;
-    authGuard(mockReq(`Bearer ${noneToken}`), mockRes(), next);
-    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
-  });
-
-  it('Redis blacklist\'te olan token reddedilir', (done) => {
+  it('userType platform olan token reddedilir (kritik izolasyon testi)', (done) => {
     const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'platform' });
-    (mockRedis.get as jest.Mock).mockResolvedValue('1');
+    (mockRedis.get as jest.Mock).mockResolvedValue(null);
 
-    authGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
+    projectGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
       expect(err).toBeInstanceOf(UnauthorizedError);
       done();
     });
   });
 
-  it('gecerli token ile req.userId ve req.userEmail set edilir', (done) => {
-    const token = makeToken({ userId: 'user123', email: 'test@test.com', userType: 'platform' });
+  it('userType eksik olan token reddedilir', (done) => {
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', projectId: 'proj1' });
+    (mockRedis.get as jest.Mock).mockResolvedValue(null);
+
+    projectGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
+      expect(err).toBeInstanceOf(UnauthorizedError);
+      done();
+    });
+  });
+
+  it('projectId eksik olan token reddedilir', () => {
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'project' });
+    projectGuard(mockReq(`Bearer ${token}`), mockRes(), next);
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
+  });
+
+  it('Redis blacklist\'te olan token reddedilir', (done) => {
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'project', projectId: 'proj1' });
+    (mockRedis.get as jest.Mock).mockResolvedValue('1');
+
+    projectGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
+      expect(err).toBeInstanceOf(UnauthorizedError);
+      done();
+    });
+  });
+
+  it('gecerli project token ile req.userId, req.userEmail, req.userType ve req.projectId set edilir', (done) => {
+    const token = makeToken({ userId: 'user123', email: 'test@test.com', userType: 'project', projectId: 'proj456' });
     (mockRedis.get as jest.Mock).mockResolvedValue(null);
 
     const req = mockReq(`Bearer ${token}`);
-    authGuard(req, mockRes(), (err) => {
+    projectGuard(req, mockRes(), (err) => {
       expect(err).toBeUndefined();
       expect(req.userId).toBe('user123');
       expect(req.userEmail).toBe('test@test.com');
+      expect(req.userType).toBe('project');
+      expect(req.projectId).toBe('proj456');
       done();
     });
   });
 
   it('Redis hatasi olursa UnauthorizedError iletir (fail closed)', (done) => {
-    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'platform' });
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'project', projectId: 'proj1' });
     (mockRedis.get as jest.Mock).mockRejectedValue(new Error('Redis down'));
 
-    authGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
+    projectGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
       expect(err).toBeInstanceOf(UnauthorizedError);
       done();
     });

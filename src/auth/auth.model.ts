@@ -6,6 +6,7 @@ export interface IRefreshToken {
   expiresAt: Date;
   revokedAt: Date | null;
   createdAt: Date;
+  userType?: 'platform' | 'project';
 }
 
 const refreshTokenSchema = new Schema<IRefreshToken>(
@@ -14,6 +15,7 @@ const refreshTokenSchema = new Schema<IRefreshToken>(
     tokenHash: { type: String, required: true },
     expiresAt: { type: Date, required: true },
     revokedAt: { type: Date, default: null },
+    userType: { type: String, enum: ['platform', 'project'], default: 'platform' },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

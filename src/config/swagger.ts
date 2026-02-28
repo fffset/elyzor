@@ -143,6 +143,43 @@ const swaggerDefinition = {
           retryAfter: { type: 'number', description: 'Yalnızca rate_limit_exceeded hatalarında' },
         },
       },
+      // --- Project Users ---
+      ProjectUserRegisterRequest: {
+        type: 'object',
+        required: ['email', 'password'],
+        properties: {
+          email: { type: 'string', format: 'email', example: 'alice@example.com' },
+          password: { type: 'string', minLength: 8, maxLength: 128, example: 'mysecret123' },
+        },
+      },
+      ProjectUserRegisterResponse: {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', example: '64f1b...' },
+              email: { type: 'string', example: 'alice@example.com' },
+              projectId: { type: 'string', example: '64f1a...' },
+            },
+          },
+          accessToken: { type: 'string', description: 'Project user JWT (userType: project)' },
+        },
+      },
+      ProjectUserLoginRequest: {
+        type: 'object',
+        required: ['email', 'password'],
+        properties: {
+          email: { type: 'string', format: 'email', example: 'alice@example.com' },
+          password: { type: 'string', example: 'mysecret123' },
+        },
+      },
+      ProjectUserLoginResponse: {
+        type: 'object',
+        properties: {
+          accessToken: { type: 'string', description: 'Project user JWT (userType: project)' },
+        },
+      },
       // --- Errors ---
       ValidationError: {
         type: 'object',
@@ -314,6 +351,50 @@ const swaggerDefinition = {
           204: { description: 'Key iptal edildi' },
           401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
           404: { description: 'Key bulunamadı' },
+        },
+      },
+    },
+    // ── Project Users ─────────────────────────────────────────────────────
+    '/projects/{projectId}/auth/register': {
+      post: {
+        tags: ['Project Users'],
+        summary: 'Proje kullanıcısı kayıt et',
+        description: 'Platform kullanıcısı (XYZ Backend), kendi projesine yeni bir son kullanıcı ekler. alice gibi end user\'lar bu endpoint\'i doğrudan çağırmaz — XYZ Backend proxy\'ler.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserRegisterRequest' } } },
+        },
+        responses: {
+          201: {
+            description: 'Kullanıcı oluşturuldu. Refresh token HTTP-only cookie olarak set edilir.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserRegisterResponse' } } },
+          },
+          400: { description: 'Validation hatası', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          401: { description: 'Platform token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          404: { description: 'Proje bulunamadı' },
+        },
+      },
+    },
+    '/projects/{projectId}/auth/login': {
+      post: {
+        tags: ['Project Users'],
+        summary: 'Proje kullanıcısı giriş yap',
+        description: 'Platform kullanıcısı (XYZ Backend), bir son kullanıcının kimlik bilgilerini doğrular ve proje user token\'ı alır.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserLoginRequest' } } },
+        },
+        responses: {
+          200: {
+            description: 'Giriş başarılı. Refresh token HTTP-only cookie olarak set edilir.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserLoginResponse' } } },
+          },
+          401: { description: 'Geçersiz kimlik bilgileri veya platform token eksik', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          404: { description: 'Proje bulunamadı' },
         },
       },
     },

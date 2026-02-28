@@ -6,6 +6,7 @@ import authRouter from './auth/auth.router';
 import projectsRouter from './projects/projects.router';
 import apiKeysRouter from './apikeys/apikeys.router';
 import verificationRouter from './verification/verification.router';
+import projectUsersRouter from './project-users/project-users.router';
 import { errorHandler } from './middleware/errorHandler';
 import { swaggerOptions } from './config/swagger';
 
@@ -20,6 +21,7 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/v1/auth', authRouter);
 app.use('/v1/projects', projectsRouter);
 app.use('/v1/projects/:projectId/keys', apiKeysRouter);
+app.use('/v1/projects/:projectId/auth', projectUsersRouter);
 app.use('/v1/verify', verificationRouter);
 
 app.get('/health', (_req, res) => {

@@ -340,3 +340,31 @@ Sınırsız input boyutu birden fazla saldırı vektörü açar: büyük JSON pa
 Email-bazlı user enumeration: saldırgan 1 milyon emaili register endpoint'ine göndererek hangileri kayıtlı bul. Veri sızıntısı olmaksızın kullanıcı listesi elde edilir. Bu liste daha sonra phishing, credential stuffing veya hedefli saldırılar için kullanılır.
 
 **Trade-off:** Meşru kullanıcı "email neden çalışmıyor?" diye anlamayabilir. Çözüm: login ekranına "Hesabınız var mı? Giriş yapın" yönlendirmesi — bu UX'te yapılır, hata mesajında değil.
+
+---
+
+## 024 — İki user tipi ayrı koleksiyonlarda tutulur; guard'lar token tipini zorunlu kılar
+
+**Karar:**
+1. Platform user (`users` koleksiyonu) ve project user (`project_users` koleksiyonu) ayrı MongoDB koleksiyonlarında tutulur.
+2. JWT payload'ına `userType: 'platform' | 'project'` claim'i eklenir. Project token ayrıca `projectId` taşır.
+3. `platformGuard` ve `projectGuard` ayrı middleware'ler olarak implement edilir. `authGuard` geriye dönük uyumluluk için `platformGuard`'a alias'tır.
+4. Her iki guard da `userType` değeri yanlışsa 401 döner — iki tip birbirinin endpoint'ine erişemez.
+5. Project user register/login endpoint'leri de `platformGuard` gerektirir: XYZ Backend platform JWT ile Elyzor'a proxy atar, alice hiçbir zaman doğrudan Elyzor'u görmez.
+6. Refresh token'lar aynı `refresh_tokens` koleksiyonunda tutulur; `userType` field'ı ile ayrıştırılır (opsiyonel, default `'platform'`).
+
+**Gerekçe:**
+
+*Neden iki ayrı koleksiyon?*
+Tek koleksiyonda `role` field'ı ile ayrıştırmak şema kirliliğine yol açar: platform user'da `projectId` null kalır, project user'da bazı platform field'ları anlamsız olur. Ayrı koleksiyonlar separation of concerns'ı korur.
+
+*Neden `platformGuard` + `projectGuard`?*
+Tek bir `authGuard`'da `userType` kontrol etmek mümkün ama endpoint'lerin `userType`'ı ayrı ayrı kontrol etmesi gerekir — bu kod tekrarına yol açar. Ayrı guard middleware'leri her endpoint'te tek satırda izolasyonu garanti eder.
+
+*Neden project register/login da platformGuard gerektirir?*
+Alice'in doğrudan Elyzor'a erişmesi tasarım gereği engellenmektedir. XYZ Backend, alice'in kimlik bilgilerini kendi platform JWT'si ile Elyzor'a iletir. Bu bir B2B proxy modelidir — Elyzor'u kullanan XYZ, alice'i bilmez; Elyzor da alice'i tanımaz, yalnızca XYZ'yi tanır.
+
+*Neden aynı refresh_tokens koleksiyonu?*
+İki ayrı koleksiyon (`platform_refresh_tokens`, `project_refresh_tokens`) `revokeAllUserTokens` gibi cross-cutting işlemleri karmaşıklaştırır. `userType` field'ı ile tek koleksiyon yeterlidir; gelecekte gerekirse koleksiyona ayrılabilir.
+
+**Trade-off:** Project user'ların kendi başlarına Elyzor'a login olamaması bir kısıtlamadır. V2'de Organizations feature ile daha esnek rol tabanlı erişim modeli düşünülebilir.
