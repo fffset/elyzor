@@ -179,6 +179,7 @@ Client ───────▶ │   Elyzor API  │
 - **JWT algorithm pinned to HS256** — algorithm confusion attacks prevented
 - **Refresh token rotation** — each `/refresh` issues a new token and invalidates the old one
 - **Token theft detection** — using a revoked refresh token triggers full session wipe
+- **Token type isolation** — `platformGuard` rejects project tokens; `projectGuard` rejects platform tokens. Tokens cannot cross guard boundaries.
 - Production startup validation — missing `JWT_SECRET`, `MONGO_URI`, or `REDIS_URL` crashes the process before accepting traffic
 - Request payload capped at 16kb; `Authorization` header capped at 200 characters
 
@@ -191,15 +192,20 @@ elyzor/
 ├── src/
 │   ├── auth/
 │   ├── users/
+│   ├── project-users/    # End users managed by platform customers
 │   ├── projects/
 │   ├── apikeys/
 │   ├── verification/
 │   ├── usage/
 │   ├── middleware/
+│   │   ├── platformGuard.ts   # Accepts userType: 'platform' only
+│   │   ├── projectGuard.ts    # Accepts userType: 'project' + projectId only
+│   │   └── authGuard.ts       # Alias for platformGuard (backward compat)
 │   └── config/
 ├── docs/
 │   ├── architecture.md
 │   ├── security.md
+│   ├── decisions.md
 │   └── api-spec.md
 ├── docker-compose.yml
 ├── .env.example
@@ -218,6 +224,8 @@ elyzor/
 - [x] Refresh token rotation with theft detection
 - [x] Multi-layer rate limiting (IP + key-based)
 - [x] Token blacklisting on logout
+- [x] Two user types: platform users and project users
+- [x] Token type isolation — platform and project tokens cannot access each other's endpoints
 
 **V2**
 - [ ] Web dashboard
