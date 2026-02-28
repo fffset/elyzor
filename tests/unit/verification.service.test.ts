@@ -69,6 +69,30 @@ describe('VerificationService', () => {
       const result = await service.verify('Bearer sk_live_abc.', '127.0.0.1');
       expect(result).toEqual({ valid: false, error: 'invalid_key' });
     });
+
+    it('200 karakterden uzun Authorization header invalid_key dondurur (DoS korumasi)', async () => {
+      const longKey = 'Bearer sk_live_' + 'a'.repeat(300);
+      const result = await service.verify(longKey, '127.0.0.1');
+      expect(result).toEqual({ valid: false, error: 'invalid_key' });
+      // DB'ye gidilmemeli
+      expect(apiKeyRepo.findBySecretHash).not.toHaveBeenCalled();
+    });
+
+    it('tam 200 karakter olan key reddedilmez (sinir degeri)', async () => {
+      // 200 karakter: "sk_live_" (8) + nokta icermeyen sekil → parseKey'de reddedilecek ama extractKey'den gecmeli
+      const borderKey = 'Bearer ' + 'sk_live_' + 'a'.repeat(192);
+      // extractKey gecer (200 karakter) ama parseKey reddeder (nokta yok)
+      const result = await service.verify(borderKey, '127.0.0.1');
+      expect(result).toEqual({ valid: false, error: 'invalid_key' });
+    });
+
+    it('201 karakter olan key extractKey\'de reddedilir', async () => {
+      const overKey = 'Bearer ' + 'a'.repeat(201);
+      (mockRedis.get as jest.Mock).mockResolvedValue(null);
+      const result = await service.verify(overKey, '127.0.0.1');
+      expect(result).toEqual({ valid: false, error: 'invalid_key' });
+      expect(apiKeyRepo.findBySecretHash).not.toHaveBeenCalled();
+    });
   });
 
   // ── Cache miss → DB lookup ──────────────────────────────────────────────────

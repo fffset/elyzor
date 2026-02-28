@@ -267,3 +267,76 @@ describe('...', () => {
 **İstisna:** `redis` gibi default export'lu modüller için factory kullanmak gerekir — bu kabul edilebilir çünkü bu modüller service içinde sınıf değil, nesne olarak kullanılır.
 
 **Trade-off:** Bu pattern service'lerin modül-seviyesi singleton kullandığını varsayar. İleride service'ler constructor DI'a geçerse (örn. `new ProjectService(repo)`) bu pattern değişecektir — o zaman `beforeEach` içinde `new Service(mockRepo)` ile doğrudan geçmek daha temiz olur.
+
+---
+
+## 019 — JWT algorithm açıkça sabitleniyor
+
+**Karar:** `jwt.sign()` çağrısında `algorithm: 'HS256'`, `jwt.verify()` çağrısında `algorithms: ['HS256']` her zaman yazılır.
+
+**Gerekçe:**
+`jsonwebtoken` kütüphanesi algorithm belirtilmezse varsayılan olarak HS256 kullanır — ama bu, kütüphane versiyonu değiştiğinde veya payload'daki `alg` header'ı manipüle edildiğinde beklenmedik davranışa yol açabilir. `alg: none` saldırısı: imzasız JWT'nin bazı kütüphane konfigürasyonlarında kabul edilmesi. Algoritmanın kod seviyesinde sabitlenmesi bu risk sınıfını tamamen ortadan kaldırır.
+
+**Uygulama:**
+- `src/auth/services/token.service.ts` → `{ expiresIn, algorithm: 'HS256' }`
+- `src/middleware/authGuard.ts` → `jwt.verify(token, secret, { algorithms: ['HS256'] })`
+
+**Trade-off:** Küçük bir kod satırı eklemek karşılığında algorithm confusion saldırı vektörü tamamen kapatılıyor. Maliyet sıfır.
+
+---
+
+## 020 — Refresh token rotation zorunlu
+
+**Karar:** Her `/refresh` isteğinde eski refresh token revoke edilir, yeni bir token çifti verilir. Aynı refresh token ikinci kez kullanılamaz.
+
+**Gerekçe:**
+Önceki implementasyonda refresh token ömrü boyunca (7 gün) sonsuz kez access token almak için kullanılabiliyordu. Token çalınırsa saldırgan 7 gün boyunca erişimi sürdürebilirdi — kullanıcı logout olmadıkça fark edilmezdi.
+
+Rotation ile:
+1. Her kullanımda token değişir → çalınan eski token geçersiz olur
+2. Revoke edilmiş token tekrar gelirse → **token theft sinyali** → tüm oturumlar kapatılır
+3. Rotation her zaman DB'den yapılır — Redis cache, revoke durumunu gizleyebileceği için refresh path'inde `findRefreshTokenAny` kullanılır
+
+**Uygulama:** `src/auth/auth.service.ts` → `refresh()` metodu. `src/auth/auth.repository.ts` → `findRefreshTokenAny()` eklendi.
+
+**Trade-off:** Her refresh'te bir DB write (revoke) + bir DB read (create) ekleniyor. Frekans düşük (15 dakikada bir), etki ihmal edilebilir.
+
+---
+
+## 021 — Üretim ortamında zorunlu env değişkenleri startup'ta doğrulanır
+
+**Karar:** `src/config/env.ts` içinde `requireInProduction()` fonksiyonu, `NODE_ENV=production` ortamında `JWT_SECRET`, `MONGO_URI`, `REDIS_URL`'in eksikliğinde uygulama başlamadan hata fırlatır.
+
+**Gerekçe:**
+Eksik env değişkeni ilk isteğe kadar fark edilmez ve production'da gizli bir güvenlik açığı bırakır (örn. `JWT_SECRET` olmadan varsayılan değerle çalışmak — herkes token forge edebilir). Hızlı-fail prensibi: sorun ne kadar erken yakalanırsa zarar o kadar azdır.
+
+**Uygulama:** Dev ortamında güvenli fallback'ler (`dev_secret_change_in_production`, `localhost:27017`) kalır. Production ortamında bu fallback'ler hata fırlatır.
+
+**Trade-off:** Yanlış `NODE_ENV` ile prod config'ini test etmek mümkün olmaz. Bu bir feature, bug değil.
+
+---
+
+## 022 — Input boyutu HTTP katmanında sınırlandırılır
+
+**Karar:** `express.json({ limit: '16kb' })` ile JSON payload sınırı konulur. Tüm string DTO field'larına `@MaxLength()` eklenir. `Authorization` header'ında 200 karakterden uzun değerler reddedilir.
+
+**Gerekçe:**
+Sınırsız input boyutu birden fazla saldırı vektörü açar: büyük JSON payload'lar bellek tüketir, uzun string'ler MongoDB'ye yazılırsa storage şişer ve sorgular yavaşlar, dev-null Authorization header'ları (`Bearer <10MB metin>`) CPU/bellek DoS'a yol açabilir.
+
+**Boyutlar neden bu değerler?**
+- 16kb: En büyük meşru JSON payload (proje oluşturma + metadata) 1kb'nin altında. 16kb makul güvenlik marjı bırakır.
+- 200 karakter: `sk_live_` + 16 hex + `.` + 64 hex = 89 karakter. 200 karakter 2x marj.
+- email max 255: RFC 5321 limiti. password max 128: bcrypt cost'unu yönetilebilir tutar.
+
+**Trade-off:** Gelecekte daha büyük payload gerektiren endpoint eklenirse limit ayarlanabilir, ama bu kasıtlı bir karar olmalıdır.
+
+---
+
+## 023 — Hata mesajları kullanıcı varlığını doğrulamaz
+
+**Karar:** Register endpoint'i email çakışmasında "Bu email zaten kullanımda" değil, "Kayıt tamamlanamadı" döndürür. Login endpoint'i zaten vague mesaj kullanıyordu — bu tutarlılık sağlandı.
+
+**Gerekçe:**
+Email-bazlı user enumeration: saldırgan 1 milyon emaili register endpoint'ine göndererek hangileri kayıtlı bul. Veri sızıntısı olmaksızın kullanıcı listesi elde edilir. Bu liste daha sonra phishing, credential stuffing veya hedefli saldırılar için kullanılır.
+
+**Trade-off:** Meşru kullanıcı "email neden çalışmıyor?" diye anlamayabilir. Çözüm: login ekranına "Hesabınız var mı? Giriş yapın" yönlendirmesi — bu UX'te yapılır, hata mesajında değil.

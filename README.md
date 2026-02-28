@@ -87,9 +87,10 @@ curl -X POST http://localhost:3000/v1/projects \
 
 ```bash
 curl -X POST http://localhost:3000/v1/projects/<projectId>/keys \
-  -H "Authorization: Bearer <your_jwt>"
+  -H "Authorization: Bearer <your_jwt>" \
+  -H "Content-Type: application/json"
 
-# → { "key": "sk_live_xxxxx", "id": "..." }
+# → { "key": "sk_live_xxxxx", "id": "...", "publicPart": "...", ... }
 # Save this key — it won't be shown again.
 ```
 
@@ -164,18 +165,22 @@ Client ───────▶ │   Elyzor API  │
                             rate limiting)
 ```
 
-**Stack:** Node.js · Express/NestJS · MongoDB · Redis · Docker
+**Stack:** Node.js · Express · MongoDB · Redis · Docker
 
 ---
 
 ## Security
 
-- API keys are **never stored in plaintext** — only cryptographic hashes
+- API keys are **never stored in plaintext** — only SHA-256 hashes
 - **Constant-time comparison** during verification (prevents timing attacks)
 - Keys use a `sk_live_` prefix for easy identification and scanning
 - **Immediate revocation** — revoked keys fail on next request
 - Redis-backed rate limiting per key
-- Zero trust between services
+- **JWT algorithm pinned to HS256** — algorithm confusion attacks prevented
+- **Refresh token rotation** — each `/refresh` issues a new token and invalidates the old one
+- **Token theft detection** — using a revoked refresh token triggers full session wipe
+- Production startup validation — missing `JWT_SECRET`, `MONGO_URI`, or `REDIS_URL` crashes the process before accepting traffic
+- Request payload capped at 16kb; `Authorization` header capped at 200 characters
 
 ---
 
@@ -209,6 +214,10 @@ elyzor/
 - [x] API key lifecycle (create, list, revoke)
 - [x] Verification endpoint
 - [x] Usage logging
+- [x] JWT auth with access + refresh tokens
+- [x] Refresh token rotation with theft detection
+- [x] Multi-layer rate limiting (IP + key-based)
+- [x] Token blacklisting on logout
 
 **V2**
 - [ ] Web dashboard

@@ -182,14 +182,16 @@ Request body'ye giren veriler `class-validator` dekoratörleriyle süslenmiş DT
 
 ```ts
 // src/auth/dtos/register.dto.ts
-import { IsEmail, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsString, MinLength, MaxLength } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail({}, { message: 'Geçerli bir email adresi giriniz' })
+  @MaxLength(255)
   email!: string;
 
   @IsString()
   @MinLength(8, { message: 'Şifre en az 8 karakter olmalıdır' })
+  @MaxLength(128)
   password!: string;
 }
 ```
@@ -503,21 +505,27 @@ const isBlacklisted = await redis.get(`blacklist:${token}`);
 if (isBlacklisted) throw new UnauthorizedError("Token iptal edilmiş");
 ```
 
-**Refresh token saklama — hem Redis hem MongoDB:**
+**Refresh token rotation — her `/refresh` çağrısında token değişir:**
 
 ```
-Refresh token geldi
+POST /refresh (cookie: refreshToken=xxx)
         │
-   Redis'te var mı?
+   DB'den doğrula (findRefreshTokenAny)
         │
-  ├── Evet → doğrula, yeni access token ver
-  └── Hayır → MongoDB'ye bak
-                │
-          ├── Var → Redis'e yaz, doğrula
-          └── Yok → 401 dön
+  ├── Yok veya süresi dolmuş → 401
+  ├── revokedAt != null → token theft! → tüm oturumları kapat → 401
+  └── Geçerli
+        │
+   Eski token revoke et (MongoDB + Redis)
+        │
+   Yeni token çifti ver
+        │
+   { accessToken } body'de, yeni refreshToken cookie'de
 ```
 
-MongoDB source of truth, Redis cache. Redis çökerse MongoDB'ye fallback — aynı verification mantığı.
+**Token theft detection:** Revoke edilmiş bir token geldiğinde saldırı sinyali kabul edilir — o kullanıcının tüm oturumları derhal kapatılır (`revokeAllUserTokens`).
+
+**Önemli:** Rotation için her zaman DB'den sorgula — Redis cache'e güvenme. Eski token Redis'te cached olsa bile revoke kontrolü DB'den yapılmalıdır.
 
 **refresh_tokens koleksiyonu:**
 
@@ -704,6 +712,10 @@ Bunlar pazarlık konusu değildir. Asla ihlal edilmez:
 5. **Tüm yönetim endpoint'lerinde JWT zorunlu.** Yalnızca `/v1/verify` ve auth endpoint'leri public'tir.
 6. **Logout token blacklist ile yapılır.** Access token Redis'e eklenir, refresh token MongoDB'den silinir.
 7. **Rate limiting çok katmanlı uygulanır.** IP bazlı + key bazlı + endpoint bazlı. Sadece key bazlı yetmez.
+8. **JWT algorithm açıkça belirtilir.** `jwt.sign()` çağrısında `algorithm: 'HS256'`, `jwt.verify()` çağrısında `algorithms: ['HS256']` zorunludur. Algorithm confusion saldırısını (`alg: none`) önler.
+9. **Refresh token rotation zorunludur.** Her `/refresh` çağrısında eski token revoke edilip yeni token verilir. Aynı refresh token ikinci kez kullanılamaz. Revoke edilmiş token gelirse tüm kullanıcı oturumları kapatılır (token theft signal).
+10. **Input boyutu sınırlandırılır.** `express.json({ limit: '16kb' })` zorunludur. DTO'lardaki tüm string field'lara `@MaxLength()` dekoratörü eklenir. Authorization header 200 karakterden uzunsa reddedilir.
+11. **Hata mesajları bilgi sızdırmaz.** Register endpoint'i "email zaten kayıtlı" gibi kullanıcı varlığını teyit eden mesaj döndürmez — saldırgan bunu user enumeration için kullanamaz.
 
 ---
 
@@ -727,12 +739,21 @@ Env değişkenleri `src/config/env.ts` üzerinden okunur — kod içinde `proces
 
 ```ts
 // config/env.ts
+// Production'da zorunlu env değişkenleri eksikse uygulama başlamaz
+function requireInProduction(key: string, fallback: string): string {
+  const value = process.env[key];
+  if (!value && process.env.NODE_ENV === 'production') {
+    throw new Error(`${key} environment variable is required in production`);
+  }
+  return value ?? fallback;
+}
+
 export const env = {
   port: Number(process.env.PORT) || 3000,
-  mongoUri: process.env.MONGO_URI!,
-  redisUrl: process.env.REDIS_URL!,
+  mongoUri: requireInProduction('MONGO_URI', 'mongodb://localhost:27017/elyzor'),
+  redisUrl: requireInProduction('REDIS_URL', 'redis://localhost:6379'),
   jwt: {
-    secret: process.env.JWT_SECRET!,
+    secret: requireInProduction('JWT_SECRET', 'dev_secret_change_in_production'),
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
   },
@@ -894,3 +915,6 @@ npm run format
 - Yeni bir POST endpoint'i eklenince mutlaka `validateDto(DtoClass)` middleware'i de eklenir. Validation router'da middleware olarak yapılır, service içinde manuel if-check olarak değil.
 - Service katmanında yalnızca iş mantığı kontrolleri bulunur (email zaten kayıtlı mı, proje kullanıcıya ait mi vb.). Format ve tip validasyonu `validateDto`'nun işidir.
 - Swagger spec'i (`src/config/swagger.ts`) yeni endpoint eklendiğinde güncellenir. JSDoc annotation kullanılmaz.
+- JWT `sign()` çağrısında `algorithm: 'HS256'`, `verify()` çağrısında `algorithms: ['HS256']` her zaman yazılır. Varsayılana güvenme.
+- Refresh token response body'ye asla yazılmaz — sadece HTTP-only cookie olarak gönderilir.
+- Register/login gibi sensitif endpoint'lerde hata mesajı kullanıcı varlığını teyit etmemelidir (enumeration koruması).
