@@ -11,7 +11,7 @@ import { swaggerOptions } from './config/swagger';
 
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: '16kb' }));
 app.use(cookieParser());
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);

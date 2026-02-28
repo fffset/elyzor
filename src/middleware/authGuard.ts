@@ -20,7 +20,7 @@ export function authGuard(req: Request, _res: Response, next: NextFunction): voi
 
   let payload: JwtPayload;
   try {
-    payload = jwt.verify(token, env.jwt.secret) as JwtPayload;
+    payload = jwt.verify(token, env.jwt.secret, { algorithms: ['HS256'] }) as JwtPayload;
   } catch {
     next(new UnauthorizedError('Geçersiz veya süresi dolmuş token'));
     return;

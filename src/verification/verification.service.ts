@@ -13,7 +13,9 @@ const CACHE_TTL = 300;
 export class VerificationService {
   private extractKey(authHeader: string | undefined): string | null {
     if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-    return authHeader.slice(7).trim() || null;
+    const key = authHeader.slice(7).trim();
+    if (!key || key.length > 200) return null;
+    return key;
   }
 
   private parseKey(fullKey: string): { publicPart: string; secretPart: string } | null {

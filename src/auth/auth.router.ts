@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthService, REFRESH_COOKIE } from './auth.service';
 import { authGuard } from '../middleware/authGuard';
+import { UnauthorizedError } from '../errors';
 import { validateDto } from '../middleware/validateDto';
 import { RegisterDto } from './dtos/register.dto';
 import { LoginDto } from './dtos/login.dto';
@@ -20,7 +21,7 @@ router.post('/register', validateDto(RegisterDto), async (req: Request, res: Res
     const dto: RegisterDto = req.body as RegisterDto;
     const { user, token } = await authService.register(dto);
     res.cookie(REFRESH_COOKIE, token.refreshToken, COOKIE_OPTIONS);
-    res.status(201).json({ user, token });
+    res.status(201).json({ user, accessToken: token.accessToken });
   } catch (err) {
     next(err);
   }
@@ -40,8 +41,9 @@ router.post('/login', validateDto(LoginDto), async (req: Request, res: Response,
 router.post('/refresh', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const rawRefreshToken: string | undefined = req.cookies?.[REFRESH_COOKIE];
-    const result = await authService.refresh(rawRefreshToken);
-    res.json(result);
+    const { accessToken, refreshToken } = await authService.refresh(rawRefreshToken);
+    res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+    res.json({ accessToken });
   } catch (err) {
     next(err);
   }
@@ -49,7 +51,12 @@ router.post('/refresh', async (req: Request, res: Response, next: NextFunction):
 
 router.post('/logout', authGuard, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const accessToken = req.headers.authorization!.slice(7);
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      next(new UnauthorizedError('Authorization header eksik'));
+      return;
+    }
+    const accessToken = authHeader.slice(7);
     const rawRefreshToken: string | undefined = req.cookies?.[REFRESH_COOKIE];
     await authService.logout(accessToken, rawRefreshToken);
     res.clearCookie(REFRESH_COOKIE);
@@ -61,8 +68,13 @@ router.post('/logout', authGuard, async (req: Request, res: Response, next: Next
 
 router.post('/logout-all', authGuard, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const accessToken = req.headers.authorization!.slice(7);
-    await authService.logoutAll(req.userId!, accessToken);
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !req.userId) {
+      next(new UnauthorizedError('Yetkilendirme hatası'));
+      return;
+    }
+    const accessToken = authHeader.slice(7);
+    await authService.logoutAll(req.userId, accessToken);
     res.clearCookie(REFRESH_COOKIE);
     res.status(204).send();
   } catch (err) {

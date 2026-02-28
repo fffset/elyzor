@@ -9,7 +9,7 @@ import redis from '../config/redis';
 import { RegisterDto } from './dtos/register.dto';
 import { LoginDto } from './dtos/login.dto';
 import { generateAccessToken } from './services/token.service';
-import { RegisterResponse, LoginResponse, RefreshResponse } from './auth.types';
+import { RegisterResponse, LoginResponse, RotatedRefreshResponse } from './auth.types';
 
 const userRepo = new UserRepository();
 const authRepo = new AuthRepository();
@@ -51,7 +51,7 @@ export class AuthService {
   async register(dto: RegisterDto): Promise<RegisterResponse> {
     const existing = await userRepo.findByEmail(dto.email);
     if (existing) {
-      throw new ValidationError('Bu email zaten kullanımda');
+      throw new ValidationError('Kayıt tamamlanamadı');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, env.bcryptRounds);
@@ -81,34 +81,43 @@ export class AuthService {
     return { response: { accessToken }, refreshToken };
   }
 
-  async refresh(rawRefreshToken: string | undefined): Promise<RefreshResponse> {
+  async refresh(rawRefreshToken: string | undefined): Promise<RotatedRefreshResponse> {
     if (!rawRefreshToken) {
       throw new UnauthorizedError('Refresh token gerekli');
     }
 
     const tokenHash = hashToken(rawRefreshToken);
 
-    const cacheKey = `refresh:${tokenHash}`;
-    let userId: string | null = await redis.get(cacheKey);
+    // Rotation için her zaman DB'den doğrula — cache'e güvenme
+    const stored = await authRepo.findRefreshTokenAny(tokenHash);
 
-    if (!userId) {
-      const stored = await authRepo.findRefreshToken(tokenHash);
-      if (!stored || stored.expiresAt < new Date()) {
-        throw new UnauthorizedError('Geçersiz veya süresi dolmuş refresh token');
-      }
-      userId = stored.userId.toString();
-      const ttl = Math.floor((stored.expiresAt.getTime() - Date.now()) / 1000);
-      await redis.setex(cacheKey, ttl, userId);
+    if (!stored || stored.expiresAt < new Date()) {
+      throw new UnauthorizedError('Geçersiz veya süresi dolmuş refresh token');
     }
+
+    if (stored.revokedAt !== null) {
+      // Revoke edilmiş token kullanıldı → token theft sinyali → tüm oturumları kapat
+      await authRepo.revokeAllUserTokens(stored.userId.toString());
+      await redis.del(`refresh:${tokenHash}`);
+      throw new UnauthorizedError('Geçersiz veya süresi dolmuş refresh token');
+    }
+
+    const userId = stored.userId.toString();
 
     const user = await userRepo.findById(userId);
     if (!user) {
       throw new UnauthorizedError('Kullanıcı bulunamadı');
     }
 
-    const accessToken = generateAccessToken({ id: user._id.toString(), email: user.email });
+    // Eski token'ı revoke et (rotation)
+    await authRepo.revokeRefreshToken(tokenHash);
+    await redis.del(`refresh:${tokenHash}`);
 
-    return { accessToken };
+    // Yeni token çifti ver
+    const accessToken = generateAccessToken({ id: user._id.toString(), email: user.email });
+    const newRefreshToken = await issueRefreshToken(userId);
+
+    return { accessToken, refreshToken: newRefreshToken };
   }
 
   async logout(accessToken: string, rawRefreshToken: string | undefined): Promise<void> {

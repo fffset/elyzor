@@ -13,3 +13,8 @@ export interface LoginResponse {
 export interface RefreshResponse {
   accessToken: string;
 }
+
+export interface RotatedRefreshResponse {
+  accessToken: string;
+  refreshToken: string;
+}

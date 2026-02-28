@@ -37,7 +37,6 @@ describe('AuthService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Her beforeEach'te yeni service → yeni repo instance'lari
     service = new AuthService();
     authRepo.createRefreshToken.mockResolvedValue({} as never);
   });
@@ -118,40 +117,63 @@ describe('AuthService', () => {
     });
 
     it('token DB\'de yoksa UnauthorizedError firlatir', async () => {
-      (mockRedis.get as jest.Mock).mockResolvedValue(null);
-      authRepo.findRefreshToken.mockResolvedValue(null);
+      authRepo.findRefreshTokenAny.mockResolvedValue(null);
       await expect(service.refresh('some_token')).rejects.toThrow(UnauthorizedError);
     });
 
     it('token suresi dolmussa UnauthorizedError firlatir', async () => {
-      (mockRedis.get as jest.Mock).mockResolvedValue(null);
-      authRepo.findRefreshToken.mockResolvedValue({
+      authRepo.findRefreshTokenAny.mockResolvedValue({
         userId: { toString: () => 'user123' },
         expiresAt: new Date(Date.now() - 1000),
+        revokedAt: null,
       } as never);
       await expect(service.refresh('some_token')).rejects.toThrow(UnauthorizedError);
     });
 
-    it('Redis cache hit\'te MongoDB\'ye gitmez', async () => {
-      (mockRedis.get as jest.Mock).mockResolvedValue('user123');
+    it('revoke edilmis token kullanilinca UnauthorizedError firlatir ve tum oturumlar kapatilir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue({
+        userId: { toString: () => 'user123' },
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: new Date(),
+      } as never);
+      authRepo.revokeAllUserTokens.mockResolvedValue(undefined as never);
+      (mockRedis.del as jest.Mock).mockResolvedValue(1);
+
+      await expect(service.refresh('some_token')).rejects.toThrow(UnauthorizedError);
+      expect(authRepo.revokeAllUserTokens).toHaveBeenCalledWith('user123');
+    });
+
+    it('gecerli token ile yeni accessToken ve refreshToken dondurur (rotation)', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue({
+        userId: { toString: () => 'user123' },
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: null,
+      } as never);
       userRepo.findById.mockResolvedValue(mockUser as never);
+      authRepo.revokeRefreshToken.mockResolvedValue(undefined as never);
+      (mockRedis.del as jest.Mock).mockResolvedValue(1);
+
+      const result = await service.refresh('some_token');
+
+      expect(result.accessToken).toBe('mock_access_token');
+      expect(result.refreshToken.length).toBeGreaterThan(0);
+      expect(authRepo.revokeRefreshToken).toHaveBeenCalled();
+      expect(authRepo.createRefreshToken).toHaveBeenCalled();
+    });
+
+    it('gecerli token refresh sonrasi eski token revoke edilir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue({
+        userId: { toString: () => 'user123' },
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: null,
+      } as never);
+      userRepo.findById.mockResolvedValue(mockUser as never);
+      authRepo.revokeRefreshToken.mockResolvedValue(undefined as never);
+      (mockRedis.del as jest.Mock).mockResolvedValue(1);
 
       await service.refresh('some_token');
 
-      expect(authRepo.findRefreshToken).not.toHaveBeenCalled();
-    });
-
-    it('gecerli token ile yeni accessToken dondurur', async () => {
-      (mockRedis.get as jest.Mock).mockResolvedValue(null);
-      authRepo.findRefreshToken.mockResolvedValue({
-        userId: { toString: () => 'user123' },
-        expiresAt: new Date(Date.now() + 86400000),
-      } as never);
-      userRepo.findById.mockResolvedValue(mockUser as never);
-      (mockRedis.setex as jest.Mock).mockResolvedValue('OK');
-
-      const result = await service.refresh('some_token');
-      expect(result.accessToken).toBe('mock_access_token');
+      expect(authRepo.revokeRefreshToken).toHaveBeenCalledTimes(1);
     });
   });
 

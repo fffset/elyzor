@@ -10,6 +10,6 @@ export function generateAccessToken(user: TokenUser): string {
   return jwt.sign(
     { userId: user.id, email: user.email, tokenType: 'access' },
     env.jwt.secret,
-    { expiresIn: env.jwt.accessExpiresIn }
+    { expiresIn: env.jwt.accessExpiresIn, algorithm: 'HS256' }
   );
 }

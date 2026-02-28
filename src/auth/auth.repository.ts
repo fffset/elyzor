@@ -13,6 +13,10 @@ export class AuthRepository {
     return RefreshTokenModel.findOne({ tokenHash, revokedAt: null });
   }
 
+  async findRefreshTokenAny(tokenHash: string): Promise<IRefreshToken | null> {
+    return RefreshTokenModel.findOne({ tokenHash });
+  }
+
   async revokeRefreshToken(tokenHash: string): Promise<void> {
     await RefreshTokenModel.updateOne({ tokenHash }, { revokedAt: new Date() });
   }
