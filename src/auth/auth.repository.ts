@@ -5,7 +5,6 @@ export class AuthRepository {
     userId: string;
     tokenHash: string;
     expiresAt: Date;
-    userType?: 'platform' | 'project';
   }): Promise<IRefreshToken> {
     return RefreshTokenModel.create(data);
   }
@@ -23,9 +22,6 @@ export class AuthRepository {
   }
 
   async revokeAllUserTokens(userId: string): Promise<void> {
-    await RefreshTokenModel.updateMany(
-      { userId, revokedAt: null },
-      { revokedAt: new Date() }
-    );
+    await RefreshTokenModel.updateMany({ userId, revokedAt: null }, { revokedAt: new Date() });
   }
 }

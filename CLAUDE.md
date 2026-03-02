@@ -258,25 +258,16 @@ elyzor/
 │   │   │   ├── register.dto.ts
 │   │   │   └── login.dto.ts
 │   │   ├── services/
-│   │   │   └── token.service.ts      # generateAccessToken, generateProjectUserAccessToken
+│   │   │   └── token.service.ts      # generateAccessToken
 │   │   ├── auth.router.ts
 │   │   ├── auth.service.ts
-│   │   ├── auth.repository.ts        # refresh_tokens koleksiyonu (userType field ile)
+│   │   ├── auth.repository.ts        # refresh_tokens koleksiyonu
 │   │   ├── auth.model.ts
 │   │   └── auth.types.ts
 │   ├── users/
 │   │   ├── users.model.ts
 │   │   ├── users.repository.ts
 │   │   └── users.types.ts
-│   ├── project-users/                # Platform kullanıcısının yönettiği son kullanıcılar
-│   │   ├── dtos/
-│   │   │   ├── register-project-user.dto.ts
-│   │   │   └── login-project-user.dto.ts
-│   │   ├── project-users.router.ts   # platformGuard gerektirir
-│   │   ├── project-users.service.ts
-│   │   ├── project-users.repository.ts
-│   │   ├── project-users.model.ts    # { projectId, email } compound unique index
-│   │   └── project-users.types.ts
 │   ├── projects/
 │   │   ├── dtos/
 │   │   │   └── create-project.dto.ts
@@ -303,9 +294,7 @@ elyzor/
 │   │   ├── usage.model.ts
 │   │   └── usage.types.ts
 │   ├── middleware/
-│   │   ├── authGuard.ts              # platformGuard'a alias (geriye dönük uyumluluk)
-│   │   ├── platformGuard.ts          # userType: 'platform' zorunlu
-│   │   ├── projectGuard.ts           # userType: 'project' + projectId zorunlu
+│   │   ├── authGuard.ts
 │   │   ├── errorHandler.ts
 │   │   ├── validateDto.ts
 │   │   └── rateLimiter.ts
@@ -728,7 +717,7 @@ Bunlar pazarlık konusu değildir. Asla ihlal edilmez:
 9. **Refresh token rotation zorunludur.** Her `/refresh` çağrısında eski token revoke edilip yeni token verilir. Aynı refresh token ikinci kez kullanılamaz. Revoke edilmiş token gelirse tüm kullanıcı oturumları kapatılır (token theft signal).
 10. **Input boyutu sınırlandırılır.** `express.json({ limit: '16kb' })` zorunludur. DTO'lardaki tüm string field'lara `@MaxLength()` dekoratörü eklenir. Authorization header 200 karakterden uzunsa reddedilir.
 11. **Hata mesajları bilgi sızdırmaz.** Register endpoint'i "email zaten kayıtlı" gibi kullanıcı varlığını teyit eden mesaj döndürmez — saldırgan bunu user enumeration için kullanamaz.
-12. **Guard izolasyonu ihlal edilemez.** `platformGuard` → yalnızca `userType: 'platform'` token'ları kabul eder. `projectGuard` → yalnızca `userType: 'project'` + `projectId` içeren token'ları kabul eder. İki guard birbirinin endpoint'ine erişemez. Yeni endpoint eklerken doğru guard'ı seç — asla her ikisini de kabul eden tek bir guard yazma.
+12. **Her yönetim endpoint'i `authGuard` kullanır.** Yalnızca `/v1/verify` ve `/v1/auth/*` endpoint'leri guard dışındadır.
 
 ---
 

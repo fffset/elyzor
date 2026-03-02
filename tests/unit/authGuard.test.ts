@@ -65,7 +65,7 @@ describe('authGuard', () => {
   });
 
   it('Redis blacklist\'te olan token reddedilir', (done) => {
-    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'platform' });
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', tokenType: 'access' });
     (mockRedis.get as jest.Mock).mockResolvedValue('1');
 
     authGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
@@ -75,7 +75,7 @@ describe('authGuard', () => {
   });
 
   it('gecerli token ile req.userId ve req.userEmail set edilir', (done) => {
-    const token = makeToken({ userId: 'user123', email: 'test@test.com', userType: 'platform' });
+    const token = makeToken({ userId: 'user123', email: 'test@test.com', tokenType: 'access' });
     (mockRedis.get as jest.Mock).mockResolvedValue(null);
 
     const req = mockReq(`Bearer ${token}`);
@@ -88,7 +88,7 @@ describe('authGuard', () => {
   });
 
   it('Redis hatasi olursa UnauthorizedError iletir (fail closed)', (done) => {
-    const token = makeToken({ userId: 'u1', email: 'test@test.com', userType: 'platform' });
+    const token = makeToken({ userId: 'u1', email: 'test@test.com', tokenType: 'access' });
     (mockRedis.get as jest.Mock).mockRejectedValue(new Error('Redis down'));
 
     authGuard(mockReq(`Bearer ${token}`), mockRes(), (err) => {
