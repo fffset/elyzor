@@ -5,7 +5,8 @@ export type VerificationResult = 'success' | 'invalid_key' | 'revoked' | 'rate_l
 export interface IUsage extends Document {
   _id: Types.ObjectId;
   projectId: Types.ObjectId;
-  apiKeyId: Types.ObjectId;
+  apiKeyId?: Types.ObjectId;
+  serviceId?: Types.ObjectId;
   result: VerificationResult;
   latencyMs: number;
   ip: string;
@@ -15,7 +16,8 @@ export interface IUsage extends Document {
 
 export interface UsageLogDto {
   projectId: string;
-  apiKeyId: string;
+  apiKeyId?: string;
+  serviceId?: string;
   result: VerificationResult;
   latencyMs: number;
   ip: string;

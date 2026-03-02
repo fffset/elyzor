@@ -99,6 +99,12 @@ describe('VerificationService', () => {
       expect(result).toEqual({ valid: false, error: 'invalid_key' });
       expect(apiKeyRepo.findBySecretHash).not.toHaveBeenCalled();
     });
+
+    it('svc_live_ prefix\'li key reddedilir — cross-contamination guard', async () => {
+      const result = await service.verify('Bearer svc_live_abc12345.secret9876', '127.0.0.1');
+      expect(result).toEqual({ valid: false, error: 'invalid_key' });
+      expect(apiKeyRepo.findBySecretHash).not.toHaveBeenCalled();
+    });
   });
 
   // ── Cache miss → DB lookup ──────────────────────────────────────────────────

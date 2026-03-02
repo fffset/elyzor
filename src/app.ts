@@ -5,7 +5,9 @@ import swaggerJsdoc from 'swagger-jsdoc';
 import authRouter from './auth/auth.router';
 import projectsRouter from './projects/projects.router';
 import apiKeysRouter from './apikeys/apikeys.router';
+import servicesRouter from './services/services.router';
 import verificationRouter from './verification/verification.router';
+import verifyServiceRouter from './verify-service/verify-service.router';
 import { errorHandler } from './middleware/errorHandler';
 import { swaggerOptions } from './config/swagger';
 
@@ -20,6 +22,8 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/v1/auth', authRouter);
 app.use('/v1/projects', projectsRouter);
 app.use('/v1/projects/:projectId/keys', apiKeysRouter);
+app.use('/v1/projects/:projectId/services', servicesRouter);
+app.use('/v1/verify/service', verifyServiceRouter);
 app.use('/v1/verify', verificationRouter);
 
 app.get('/v1/health', (_req, res) => {
