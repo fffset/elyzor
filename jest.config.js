@@ -28,4 +28,7 @@ module.exports = {
     },
   },
   testTimeout: 10000,
+  // Modül-level ioredis instance'ı (mock'lu bile olsa) event loop'u açık tutar.
+  // Unit testler tamamen mock'lu — gerçek bağlantı yok; forceExit güvenlidir.
+  forceExit: true,
 };
