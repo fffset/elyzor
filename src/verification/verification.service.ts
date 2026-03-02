@@ -3,6 +3,7 @@ import { ApiKeyRepository } from '../apikeys/apikeys.repository';
 import { UsageService } from '../usage/usage.service';
 import redis from '../config/redis';
 import { env } from '../config/env';
+import { logger } from '../config/logger';
 import { VerifyResult, CachedKeyData } from './verification.types';
 
 const apiKeyRepo = new ApiKeyRepository();
@@ -96,9 +97,11 @@ export class VerificationService {
     let keyData: CachedKeyData | null;
     try {
       const cached = await redis.get(this.cacheKey(secretHash));
-      keyData = cached ? (JSON.parse(cached) as CachedKeyData) : await this.lookupFromDb(secretHash);
+      keyData = cached
+        ? (JSON.parse(cached) as CachedKeyData)
+        : await this.lookupFromDb(secretHash);
     } catch (err) {
-      console.error('Verification error:', (err as Error).message);
+      logger.error({ err }, 'Verification error');
       return { valid: false, error: 'invalid_key' };
     }
 
@@ -121,7 +124,7 @@ export class VerificationService {
     try {
       rateLimit = await this.checkRateLimit(keyData.projectId);
     } catch (err) {
-      console.error('Rate limit error:', (err as Error).message);
+      logger.error({ err }, 'Rate limit error');
       return { valid: false, error: 'invalid_key' };
     }
 

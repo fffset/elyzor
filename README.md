@@ -189,21 +189,24 @@ POST   /v1/auth/login
 POST   /v1/auth/refresh
 POST   /v1/auth/logout
 POST   /v1/auth/logout-all
+GET    /v1/auth/me
 
 # Projects
 GET    /v1/projects
 POST   /v1/projects
-DELETE /v1/projects/:id
+DELETE /v1/projects/:id          # cascade: deletes keys, services, usage logs
 
 # API Keys
 GET    /v1/projects/:projectId/keys
 POST   /v1/projects/:projectId/keys
 DELETE /v1/projects/:projectId/keys/:keyId
+POST   /v1/projects/:projectId/keys/:keyId/rotate
 
 # Services
 GET    /v1/projects/:projectId/services
 POST   /v1/projects/:projectId/services
 DELETE /v1/projects/:projectId/services/:serviceId
+POST   /v1/projects/:projectId/services/:serviceId/rotate
 
 # Stats
 GET    /v1/projects/:projectId/stats?range=7d
@@ -263,12 +266,13 @@ Client ───────▶ │   Elyzor API  │
 - **Constant-time comparison** during verification (prevents timing attacks)
 - `sk_live_` and `svc_live_` prefixes are mutually exclusive — a service key cannot verify as an API key and vice versa
 - **Immediate revocation** — revoked credentials fail on next request
-- Redis-backed rate limiting per key
+- **Multi-layer rate limiting** — IP-based (on `/register`, `/login`, `/verify`) + per-key/service
 - **JWT algorithm pinned to HS256** — algorithm confusion attacks prevented
 - **Refresh token rotation** — each `/refresh` issues a new token and invalidates the old one
 - **Token theft detection** — using a revoked refresh token triggers full session wipe
 - Production startup validation — missing `JWT_SECRET`, `MONGO_URI`, or `REDIS_URL` crashes the process before accepting traffic
 - Request payload capped at 16kb; `Authorization` header capped at 200 characters
+- **Request ID tracing** — every request carries an `X-Request-Id` header (generated or propagated) for log correlation
 
 ---
 
@@ -314,13 +318,15 @@ elyzor/
 - [x] Usage statistics (`GET /v1/projects/:id/stats`)
 - [x] Deep health check (MongoDB + Redis probe)
 - [x] Graceful shutdown (SIGTERM/SIGINT)
+- [x] Key rotation (API keys + service identities)
+- [x] Cascade deletion (project delete removes all associated data)
+- [x] Current user profile (`GET /v1/auth/me`)
+- [x] Request ID tracing (`X-Request-Id` header)
+- [x] Structured JSON logging (pino)
 
 **V2**
 - [ ] Web dashboard
 - [ ] Project roles & team access
-
-**V3**
-- [ ] Key rotation
 - [ ] Webhook events
 - [ ] SDK support (Node, Python, Go)
 

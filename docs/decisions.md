@@ -397,3 +397,65 @@ Integration testler Docker gerektiriyor — MongoDB ve Redis servisleri çalış
 Güvenlik-kritik bir servis için %70 çok düşük, %90 bu projenin router/config katmanlarını da kapsayı zorunda bırakır ve gerçekçi değil. Service katmanı zaten %95+ kapsamda — exclude edilen dosyalar düşürüyor. %80/%75 hem ulaşılabilir hem zorlamacı bir eşik.
 
 **Trade-off:** `--no-verify` ile hook'lar atlanabilir. Bu bir developer deneyimi kararı — zorla engellemek mümkün değil. Gerçek güvence CI'da sağlanır.
+---
+
+## 026 — Auth endpoint'lerde IP bazlı rate limit
+
+**Karar:** `/register` ve `/login` endpoint'leri IP başına rate limit'e tabi tutulur. Limit, key/service rate limit ile aynı `env.rateLimit.ip` config'ini paylaşır.
+
+**Gerekçe:**
+Brute-force saldırıları ve credential stuffing girişimleri giriş endpoint'lerini hedef alır. JWT tabanlı auth, token blacklist gibi upstream korumalar bu saldırıları engelleyemez. IP bazlı limit bu kapıyı kapatır.
+
+**Fail-open tasarımı:** IP rate limit middleware'i Redis'e ulaşamadığında isteği geçirir (fail open). Key/service doğrulaması ise tam tersi fail-closed'dır. Gerekçe: altyapı hatası yüzünden tüm giriş işlemlerini bloklamak yerine, backend sistemlerin erişilemez kalması daha az kabul edilebilirdir.
+
+**Trade-off:** NAT arkasındaki kullanıcılar aynı IP'yi paylaşır. Limit aşıldığında meşru kullanıcı da 429 alabilir. `RATE_LIMIT_IP_MAX` değeri bu tradeoff'u yönetmek için configure edilebilir.
+
+---
+
+## 027 — Proje silme cascade deletion
+
+**Karar:** Proje silindiğinde bağlı tüm API key'ler, servis kimlikleri ve usage logları `Promise.all` ile eş zamanlı olarak silinir; proje en son silinir.
+
+**Gerekçe:**
+Orphan kayıtlar disk israfı yaratır ve gelecekte yanlış sorgu sonuçları üretebilir. "Proje sil" işlemi doğal olarak tüm alt kaynakları da ortadan kaldırmalıdır.
+
+**Sıralama önemli:** Önce child kayıtlar, sonra proje. Proje önce silinirse transaction olmadığından child kayıtlar orphan kalabilir.
+
+**Trade-off:** Büyük projelerde (binlerce key/log) silme işlemi yavaş olabilir. V1 için bu kabul edilebilir — gerekirse arka planda soft delete + cleanup job mimarisine geçilebilir.
+
+---
+
+## 028 — Key rotation
+
+**Karar:** API key ve servis kimlikleri rotate edilebilir. Yeni key üretilir, eski key revoke edilir, Redis cache temizlenir.
+
+**Gerekçe:**
+Periyodik key rotation, sızdırılmış credential'ların hasarını sınırlar. Secret'ın süresi varsa saldırı penceresi kapanır.
+
+**Atomiklik tradeoff:** Gerçek bir transaction olmadığı için yeni key oluşturma başarılı olup revocation başarısız olabilir. Bu durumda iki geçerli key kısa süreliğine eş zamanlı var olur — bu acceptable. Tersi (revocation başarılı, yeni key oluşturma başarısız) daha kötü olurdu, bu yüzden create-first sırası tercih edilir.
+
+**Revoke edilmiş key rotate edilemez:** `ForbiddenError` fırlatılır — zaten geçersiz bir key için yeni credential üretmek mantıklı değildir.
+
+---
+
+## 029 — Request ID tracing
+
+**Karar:** Her HTTP isteği `X-Request-Id` başlığı alır. Gelen istekte başlık varsa korunur, yoksa `crypto.randomUUID()` ile üretilir.
+
+**Gerekçe:**
+Dağıtık sistemlerde aynı isteğe ait log satırlarını birleştirmek için correlation ID şarttır. Client'ın kendi ID'sini geçirebilmesi end-to-end tracing'i mümkün kılar.
+
+**Trade-off:** Client, keyfi request ID geçebilir — bu log injection riski taşır. V1'de bu risk kabul edilebilir; gerekirse UUID format validasyonu eklenebilir.
+
+---
+
+## 030 — Structured logging (pino)
+
+**Karar:** `console.log/error` yerine pino kullanılır. HTTP request/response logları `pino-http` ile eklenir. Request ID ile loglar ilişkilendirilir.
+
+**Gerekçe:**
+Production'da log toplama araçları (Datadog, CloudWatch, Loki) JSON formatını parse edebilir; serbest metin logları aranabilir değildir. `pino` Node.js ekosistemindeki en hızlı logger — verification path'ine overhead eklemez.
+
+`/v1/health` endpoint'i request loglama'dan hariç tutulur (`autoLogging: ignore`) — load balancer health probe'ları log'u kirletir.
+
+**Trade-off:** Local development'ta JSON loglar okunması zor. `pino-pretty` ile güzelleştirilebilir ama production bundle'ına eklenmez; ihtiyaç olursa `LOG_LEVEL` env değişkeni ile log seviyesi ayarlanabilir.

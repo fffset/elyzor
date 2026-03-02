@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { env } from './env';
+import { logger } from './logger';
 
 const redis = new Redis(env.redisUrl, {
   lazyConnect: true,
@@ -7,7 +8,7 @@ const redis = new Redis(env.redisUrl, {
 });
 
 redis.on('error', (err: Error) => {
-  console.error('Redis bağlantı hatası:', err.message);
+  logger.error({ err }, 'Redis connection error');
 });
 
 export default redis;

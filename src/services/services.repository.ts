@@ -30,4 +30,8 @@ export class ServiceRepository {
   async revoke(id: string, projectId: string): Promise<void> {
     await ServiceModel.updateOne({ _id: id, projectId }, { revokedAt: new Date() });
   }
+
+  async deleteByProject(projectId: string): Promise<void> {
+    await ServiceModel.deleteMany({ projectId });
+  }
 }

@@ -3,6 +3,9 @@ import { ProjectRepository } from '../../src/projects/projects.repository';
 import { NotFoundError } from '../../src/errors';
 
 jest.mock('../../src/projects/projects.repository');
+jest.mock('../../src/apikeys/apikeys.repository');
+jest.mock('../../src/services/services.repository');
+jest.mock('../../src/usage/usage.repository');
 
 const mockProject = {
   _id: { toString: () => 'proj1' },

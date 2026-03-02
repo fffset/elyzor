@@ -12,11 +12,22 @@ import verificationRouter from './verification/verification.router';
 import verifyServiceRouter from './verify-service/verify-service.router';
 import { errorHandler } from './middleware/errorHandler';
 import { ipRateLimiter } from './middleware/rateLimiter';
+import { requestId } from './middleware/requestId';
 import { swaggerOptions } from './config/swagger';
+import { logger } from './config/logger';
+import pinoHttp from 'pino-http';
 import redis from './config/redis';
 
 const app = express();
 
+app.use(requestId);
+app.use(
+  pinoHttp({
+    logger,
+    genReqId: (req) => (req as express.Request).requestId ?? '',
+    autoLogging: { ignore: (req) => req.url === '/v1/health' },
+  })
+);
 app.use(express.json({ limit: '16kb' }));
 app.use(cookieParser());
 

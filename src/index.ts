@@ -4,6 +4,7 @@ import app from './app';
 import { connectMongo } from './config/db';
 import redis from './config/redis';
 import { env } from './config/env';
+import { logger } from './config/logger';
 
 async function start(): Promise<void> {
   await connectMongo();
@@ -12,30 +13,26 @@ async function start(): Promise<void> {
   const server = http.createServer(app);
 
   server.listen(env.port, () => {
-    // eslint-disable-next-line no-console
-    console.warn(`Elyzor çalışıyor: http://localhost:${env.port}`);
+    logger.info(`Elyzor running on http://localhost:${env.port}`);
   });
 
   async function shutdown(signal: string): Promise<void> {
-    // eslint-disable-next-line no-console
-    console.warn(`${signal} alındı — graceful shutdown başlıyor`);
+    logger.info(`${signal} received — graceful shutdown starting`);
 
     server.close(async () => {
       try {
         await mongoose.disconnect();
         await redis.quit();
-        // eslint-disable-next-line no-console
-        console.warn('Kapatıldı.');
+        logger.info('Server closed');
         process.exit(0);
       } catch (err) {
-        console.error('Shutdown sırasında hata:', (err as Error).message);
+        logger.error({ err }, 'Shutdown error');
         process.exit(1);
       }
     });
 
-    // 10 saniye içinde kapanmazsa zorla kapat
     setTimeout(() => {
-      console.error('Graceful shutdown zaman aşımı — zorla kapatılıyor');
+      logger.error('Graceful shutdown timeout — force exit');
       process.exit(1);
     }, 10_000).unref();
   }
@@ -49,6 +46,6 @@ async function start(): Promise<void> {
 }
 
 start().catch((err: Error) => {
-  console.error('Sunucu başlatılamadı:', err.message);
+  logger.error({ err }, 'Server startup failed');
   process.exit(1);
 });

@@ -26,4 +26,8 @@ export class ApiKeyRepository {
   async revoke(id: string, projectId: string): Promise<void> {
     await ApiKeyModel.updateOne({ _id: id, projectId }, { revoked: true });
   }
+
+  async deleteByProject(projectId: string): Promise<void> {
+    await ApiKeyModel.deleteMany({ projectId });
+  }
 }

@@ -501,6 +501,7 @@ Platform kullanıcı kimlik doğrulamasını yönetir (API tüketicilerini deği
 - `POST /v1/auth/refresh` — yeni access token al
 - `POST /v1/auth/logout` — token'ları iptal et
 - `POST /v1/auth/logout-all` — tüm cihazlardan çık
+- `GET /v1/auth/me` — mevcut kullanıcı profili (id, email, createdAt)
 
 **Token stratejisi:**
 
@@ -700,13 +701,14 @@ POST   /v1/auth/login
 POST   /v1/auth/refresh
 POST   /v1/auth/logout
 POST   /v1/auth/logout-all
+GET    /v1/auth/me
 ```
 
 ### Projeler
 ```
 GET    /v1/projects
 POST   /v1/projects
-DELETE /v1/projects/:id
+DELETE /v1/projects/:id          # cascade: keys + services + usage silinir
 ```
 
 ### API Key'leri
@@ -714,6 +716,7 @@ DELETE /v1/projects/:id
 GET    /v1/projects/:projectId/keys
 POST   /v1/projects/:projectId/keys
 DELETE /v1/projects/:projectId/keys/:keyId
+POST   /v1/projects/:projectId/keys/:keyId/rotate
 ```
 
 ### Servisler
@@ -721,6 +724,7 @@ DELETE /v1/projects/:projectId/keys/:keyId
 GET    /v1/projects/:projectId/services
 POST   /v1/projects/:projectId/services
 DELETE /v1/projects/:projectId/services/:serviceId
+POST   /v1/projects/:projectId/services/:serviceId/rotate
 ```
 
 ### İstatistikler
@@ -784,6 +788,13 @@ Bunlar pazarlık konusu değildir. Asla ihlal edilmez:
 12. **Her yönetim endpoint'i `authGuard` kullanır.** Yalnızca `/v1/verify`, `/v1/verify/service` ve `/v1/auth/*` endpoint'leri guard dışındadır.
 13. **`sk_live_` ve `svc_live_` key'ler birbirinin endpoint'inde çalışmaz.** `verification.service.ts` yalnızca `sk_live_` prefix'ini kabul eder; `verify-service.service.ts` yalnızca `svc_live_` prefix'ini kabul eder. Cross-contamination yoktur.
 14. **Service revoke, API key revoke'tan farklıdır.** API key'de `revoked: boolean`, Service'de `revokedAt?: Date`. Redis cache key'leri de farklı: `apikey:<hash>` vs `svckey:<hash>`.
+15. **Proje silme cascade'dir.** `ProjectService.deleteProject()` önce `ApiKeyRepository.deleteByProject()`, `ServiceRepository.deleteByProject()`, `UsageRepository.deleteByProject()` çağırır — `Promise.all` ile paralel — sonra projeyi siler. Sıra önemlidir: child'lar önce silinir.
+16. **Key rotation akışı:** yeni key oluştur → eski key revoke et → Redis cache temizle. Revoke edilmiş key rotate edilemez (`ForbiddenError`). Yeni plaintext key yalnızca rotate response'unda döner.
+17. **`GET /v1/auth/me`** — `authGuard` arkasında, `req.userId` üzerinden kullanıcıyı döner. `{ id, email, createdAt }` döner.
+18. **Request ID:** `src/middleware/requestId.ts` — gelen `X-Request-Id` header'ı korunur, yoksa `crypto.randomUUID()` üretilir. `req.requestId` ile erişilir. `pino-http` bu ID'yi `genReqId` callback'iyle log'lara ekler.
+19. **Logging:** `src/config/logger.ts` — pino logger. Tüm `console.error` çağrıları `logger.error({ err }, 'message')` formatına dönüştürüldü. `/v1/health` request'leri `autoLogging: ignore` ile log'dan hariç tutulur.
+20. **IP rate limit middleware:** `src/middleware/rateLimiter.ts` — `ipRateLimiter` export'u. `app.ts`'te `/v1/verify` prefix'ine ve `auth.router.ts`'te `/register` + `/login`'e uygulanır. Fail-open: Redis hatası geçiş izni verir.
+21. **Swagger yalnızca development'ta açık:** `NODE_ENV !== 'production'` koşuluyla `app.ts`'te `/docs` mount edilir.
 
 ---
 

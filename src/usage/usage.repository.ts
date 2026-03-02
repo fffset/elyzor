@@ -27,6 +27,10 @@ export class UsageRepository {
     return UsageModel.create(dto);
   }
 
+  async deleteByProject(projectId: string): Promise<void> {
+    await UsageModel.deleteMany({ projectId });
+  }
+
   async getStats(projectId: string, since: Date): Promise<StatsAggregate> {
     const projectOid = new Types.ObjectId(projectId);
 

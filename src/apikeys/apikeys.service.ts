@@ -78,4 +78,44 @@ export class ApiKeyService {
     // Anlık revocation: verification cache'ini temizle
     await redis.del(`apikey:${key.secretHash}`);
   }
+
+  async rotateKey(
+    userId: string,
+    projectId: string,
+    keyId: string
+  ): Promise<CreatedApiKeyResponse> {
+    await projectService.assertOwnership(userId, projectId);
+
+    const existing = await apiKeyRepo.findByIdAndProject(keyId, projectId);
+    if (!existing) {
+      throw new NotFoundError('API key bulunamadı');
+    }
+    if (existing.revoked) {
+      throw new ForbiddenError('Revoke edilmiş key rotate edilemez');
+    }
+
+    const { publicPart, secretPart, fullKey } = this.generateKey();
+    const secretHash = this.hashSecret(secretPart);
+
+    const newKey = await apiKeyRepo.create({
+      projectId,
+      publicPart,
+      secretHash,
+      label: existing.label,
+    });
+
+    // Eski key'i revoke et ve cache'ini temizle
+    await apiKeyRepo.revoke(keyId, projectId);
+    await redis.del(`apikey:${existing.secretHash}`);
+
+    return {
+      id: newKey._id.toString(),
+      projectId: newKey.projectId.toString(),
+      publicPart,
+      label: newKey.label,
+      revoked: false,
+      createdAt: newKey.createdAt,
+      key: fullKey,
+    };
+  }
 }

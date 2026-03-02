@@ -250,6 +250,15 @@ const swaggerDefinition = {
           avgLatencyMs: { type: 'number', example: 3.2 },
         },
       },
+      // ── User ────────────────────────────────────────────────────────────
+      UserProfile: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', example: '64f1a...' },
+          email: { type: 'string', format: 'email', example: 'user@example.com' },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
       // ── Errors ──────────────────────────────────────────────────────────
       ValidationError: {
         type: 'object',
@@ -401,6 +410,28 @@ const swaggerDefinition = {
         },
       },
     },
+    '/auth/me': {
+      get: {
+        tags: ['Auth'],
+        summary: 'Mevcut kullanıcı profilini getir',
+        description: 'JWT token sahibinin email ve hesap bilgilerini döner.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Kullanıcı profili',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UserProfile' } },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+        },
+      },
+    },
     // ── Projects ──────────────────────────────────────────────────────────
     '/projects': {
       get: {
@@ -458,10 +489,12 @@ const swaggerDefinition = {
       delete: {
         tags: ['Projects'],
         summary: 'Projeyi sil',
+        description:
+          'Proje ve bağlı tüm API key, servis ve kullanım logları cascade olarak silinir.',
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
-          204: { description: 'Proje silindi' },
+          204: { description: 'Proje ve bağlı tüm veriler silindi' },
           401: {
             description: 'Token gerekli',
             content: {
@@ -593,6 +626,47 @@ const swaggerDefinition = {
         },
       },
     },
+    '/projects/{projectId}/keys/{keyId}/rotate': {
+      post: {
+        tags: ['API Keys'],
+        summary: "API key'i rotate et",
+        description:
+          'Eski key revoke edilip yeni key üretilir. Aynı label korunur. Yeni plaintext key yalnızca bu yanıtta döner.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'keyId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          201: {
+            description: 'Yeni key üretildi',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreatedApiKeyResponse' },
+              },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Key zaten iptal edilmiş',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Key bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+    },
     // ── Services ──────────────────────────────────────────────────────────
     '/projects/{projectId}/services': {
       get: {
@@ -677,6 +751,47 @@ const swaggerDefinition = {
         ],
         responses: {
           204: { description: 'Servis iptal edildi' },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Servis zaten iptal edilmiş',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Servis bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+    },
+    '/projects/{projectId}/services/{serviceId}/rotate': {
+      post: {
+        tags: ['Services'],
+        summary: 'Servis kimliğini rotate et',
+        description:
+          'Eski servis key revoke edilip yeni key üretilir. Servis adı korunur. Yeni plaintext svc_live_ key yalnızca bu yanıtta döner.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'serviceId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          201: {
+            description: 'Yeni servis key üretildi',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreatedServiceResponse' },
+              },
+            },
+          },
           401: {
             description: 'Token gerekli',
             content: {

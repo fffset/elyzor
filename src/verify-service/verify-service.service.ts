@@ -3,6 +3,7 @@ import { ServiceRepository } from '../services/services.repository';
 import { UsageService } from '../usage/usage.service';
 import redis from '../config/redis';
 import { env } from '../config/env';
+import { logger } from '../config/logger';
 import { VerifyServiceResult, CachedServiceData } from './verify-service.types';
 
 const serviceRepo = new ServiceRepository();
@@ -96,7 +97,7 @@ export class VerifyServiceService {
         ? (JSON.parse(cached) as CachedServiceData)
         : await this.lookupFromDb(keyHash);
     } catch (err) {
-      console.error('Service verification error:', (err as Error).message);
+      logger.error({ err }, 'Service verification error');
       return { valid: false, error: 'invalid_key' };
     }
 
@@ -119,7 +120,7 @@ export class VerifyServiceService {
     try {
       rateLimit = await this.checkRateLimit(serviceData.projectId);
     } catch (err) {
-      console.error('Service rate limit error:', (err as Error).message);
+      logger.error({ err }, 'Service rate limit error');
       return { valid: false, error: 'invalid_key' };
     }
 

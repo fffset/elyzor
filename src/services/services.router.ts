@@ -44,4 +44,20 @@ router.delete(
   }
 );
 
+router.post(
+  '/:serviceId/rotate',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await servicesService.rotateService(
+        req.userId!,
+        req.params.projectId,
+        req.params.serviceId
+      );
+      res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;

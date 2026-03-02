@@ -76,4 +76,44 @@ export class ServicesService {
     await serviceRepo.revoke(serviceId, projectId);
     await redis.del(`svckey:${service.keyHash}`);
   }
+
+  async rotateService(
+    userId: string,
+    projectId: string,
+    serviceId: string
+  ): Promise<CreatedServiceResponse> {
+    await projectService.assertOwnership(userId, projectId);
+
+    const existing = await serviceRepo.findByIdAndProject(serviceId, projectId);
+    if (!existing) {
+      throw new NotFoundError('Servis bulunamadı');
+    }
+    if (existing.revokedAt != null) {
+      throw new ForbiddenError('Revoke edilmiş servis rotate edilemez');
+    }
+
+    const { publicPart, secretPart, fullKey } = this.generateKey();
+    const keyHash = this.hashSecret(secretPart);
+
+    const newService = await serviceRepo.create({
+      projectId,
+      name: existing.name,
+      keyHash,
+      publicPart,
+    });
+
+    // Eski service'i revoke et ve cache'ini temizle
+    await serviceRepo.revoke(serviceId, projectId);
+    await redis.del(`svckey:${existing.keyHash}`);
+
+    return {
+      id: newService._id.toString(),
+      projectId: newService.projectId.toString(),
+      name: newService.name,
+      publicPart,
+      revoked: false,
+      createdAt: newService.createdAt,
+      key: fullKey,
+    };
+  }
 }

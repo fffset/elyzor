@@ -34,8 +34,9 @@ describe('UsageService', () => {
     expect(usageRepo.create).toHaveBeenCalledWith(mockDto);
   });
 
-  it('log() → repo hata fırlatırsa console.error çağrılır ama exception fırlatmaz', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  it('log() → repo hata fırlatırsa hata loglanır ama exception fırlatmaz', async () => {
+    const { logger } = require('../../src/config/logger') as { logger: { error: jest.Mock } };
+    const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     usageRepo.create.mockRejectedValue(new Error('DB down'));
 
     service.log(mockDto);
@@ -43,8 +44,8 @@ describe('UsageService', () => {
     // fire-and-forget — promise resolve olmasını bekle
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(consoleSpy).toHaveBeenCalled();
-    consoleSpy.mockRestore();
+    expect(loggerSpy).toHaveBeenCalled();
+    loggerSpy.mockRestore();
   });
 
   it('log() senkron dönüş yapar — void döner', () => {
