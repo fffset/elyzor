@@ -303,6 +303,10 @@ elyzor/
 │   │   ├── verify-service.router.ts
 │   │   ├── verify-service.service.ts
 │   │   └── verify-service.types.ts
+│   ├── stats/                        # GET /v1/projects/:id/stats
+│   │   ├── stats.router.ts
+│   │   ├── stats.service.ts
+│   │   └── stats.types.ts
 │   ├── usage/
 │   │   ├── usage.service.ts
 │   │   ├── usage.repository.ts
@@ -659,30 +663,31 @@ return verificationResult;
 
 ---
 
-## Dashboard Temeli (V2 Hazırlığı)
+## Stats Modülü
 
-Dashboard V2'de gelecek ama veri **şimdiden doğru yapıda** toplanmalıdır.
+`src/stats/` — `GET /v1/projects/:projectId/stats?range=7d`
 
-**V1'de açılacak stats endpoint'i:**
+Kullanım verisi üzerinde MongoDB aggregate sorgular çalıştırır. **Verification path'inden tamamen ayrı durur** — dashboard real-time değildir; ağır sorgular güvenle çalıştırılabilir.
 
-```
-GET /v1/projects/:projectId/stats?range=7d
-```
+Desteklenen `range` değerleri: `1d`, `7d` (varsayılan), `30d`.
 
-Dönüş tipi:
+`UsageRepository.getStats(projectId, since)` üç paralel aggregate çalıştırır:
+1. Toplam istek sayısı, başarı sayısı, rate limit vuruşları, ortalama gecikme
+2. Günlük dağılım (hata vs. başarı)
+3. Top 5 en çok kullanan ApiKey
+
+Dönüş tipi (`src/stats/stats.types.ts`):
 
 ```ts
 export interface ProjectStatsResponse {
   totalRequests: number;
-  successRate: number;
+  successRate: number;           // 0-1 arası oran
   topKeys: Array<{ keyId: string; requests: number }>;
   requestsByDay: Array<{ date: string; count: number; errors: number }>;
   rateLimitHits: number;
   avgLatencyMs: number;
 }
 ```
-
-**Bu endpoint verification path'inden tamamen ayrı durur.** Ağır aggregate sorguları çalıştırabilir — dashboard real-time değildir.
 
 ---
 
@@ -990,3 +995,7 @@ npm run format
 - Register/login gibi sensitif endpoint'lerde hata mesajı kullanıcı varlığını teyit etmemelidir (enumeration koruması).
 - `apikeys/` ve `services/` modülleri birbirinden tamamen bağımsızdır. `sk_live_` key `/v1/verify/service`'te geçersizdir; `svc_live_` key `/v1/verify`'da geçersizdir.
 - `UsageLogDto`'da `apiKeyId` ve `serviceId` aynı anda dolu olamaz — biri doluysa diğeri `undefined`.
+- `GET /v1/health` MongoDB ve Redis'i aktif olarak probe eder (`mongoose.connection.readyState` + `redis.ping()`). Biri erişilemezse 503 + `{ status: "degraded" }` döner.
+- `src/index.ts` SIGTERM ve SIGINT sinyallerini yakalar. Shutdown akışı: `server.close()` → `mongoose.disconnect()` → `redis.quit()`. 10 saniye içinde tamamlanmazsa `process.exit(1)`.
+- `src/stats/` modülü verification path'inden bağımsızdır. `UsageRepository.getStats()` üç paralel aggregate çalıştırır — bu sorgular yavaş olabilir, doğrulama gecikmeyi etkilemez.
+- Stats endpoint `range` query param alır: `1d`, `7d` (varsayılan), `30d`. Geçersiz değer sessizce `7d`'ye düşürülür — 400 fırlatılmaz.

@@ -22,6 +22,12 @@ const swaggerDefinition = {
         bearerFormat: 'API Key',
         description: "Doğrulama için sk_live_ prefix'li API key",
       },
+      serviceKeyAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'Service Key',
+        description: "Servis doğrulama için svc_live_ prefix'li service key",
+      },
     },
     schemas: {
       // ── Auth ────────────────────────────────────────────────────────────
@@ -127,6 +133,46 @@ const swaggerDefinition = {
           },
         ],
       },
+      // ── Services ────────────────────────────────────────────────────────
+      CreateServiceRequest: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: {
+            type: 'string',
+            maxLength: 100,
+            pattern: '^[a-z0-9-]+$',
+            example: 'billing-service',
+            description: 'Yalnızca küçük harf, rakam ve tire',
+          },
+        },
+      },
+      ServiceResponse: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          projectId: { type: 'string' },
+          name: { type: 'string', example: 'billing-service' },
+          publicPart: { type: 'string' },
+          revoked: { type: 'boolean' },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      CreatedServiceResponse: {
+        allOf: [
+          { $ref: '#/components/schemas/ServiceResponse' },
+          {
+            type: 'object',
+            properties: {
+              key: {
+                type: 'string',
+                description: 'Plaintext svc_live_ key — yalnızca bir kez gösterilir.',
+                example: 'svc_live_abc123ef.xyz789secret',
+              },
+            },
+          },
+        ],
+      },
       // ── Verification ────────────────────────────────────────────────────
       VerifySuccess: {
         type: 'object',
@@ -145,6 +191,63 @@ const swaggerDefinition = {
             enum: ['invalid_key', 'key_revoked', 'rate_limit_exceeded'],
           },
           retryAfter: { type: 'number', description: 'Yalnızca rate_limit_exceeded hatalarında' },
+        },
+      },
+      VerifyServiceSuccess: {
+        type: 'object',
+        properties: {
+          valid: { type: 'boolean', example: true },
+          projectId: { type: 'string', example: '64f1a...' },
+          service: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string', example: 'billing-service' },
+            },
+          },
+          rateLimitRemaining: { type: 'number', example: 98 },
+        },
+      },
+      VerifyServiceFailure: {
+        type: 'object',
+        properties: {
+          valid: { type: 'boolean', example: false },
+          error: {
+            type: 'string',
+            enum: ['invalid_key', 'service_revoked', 'rate_limit_exceeded'],
+          },
+          retryAfter: { type: 'number', description: 'Yalnızca rate_limit_exceeded hatalarında' },
+        },
+      },
+      // ── Stats ───────────────────────────────────────────────────────────
+      ProjectStatsResponse: {
+        type: 'object',
+        properties: {
+          totalRequests: { type: 'number', example: 1204 },
+          successRate: { type: 'number', example: 0.97, description: '0-1 arası oran' },
+          topKeys: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                keyId: { type: 'string' },
+                requests: { type: 'number' },
+              },
+            },
+          },
+          requestsByDay: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                date: { type: 'string', example: '2026-03-01' },
+                count: { type: 'number' },
+                errors: { type: 'number' },
+              },
+            },
+          },
+          rateLimitHits: { type: 'number', example: 12 },
+          avgLatencyMs: { type: 'number', example: 3.2 },
         },
       },
       // ── Errors ──────────────────────────────────────────────────────────
@@ -179,27 +282,6 @@ const swaggerDefinition = {
     },
   },
   paths: {
-    // ── Health ────────────────────────────────────────────────────────────
-    '/health': {
-      get: {
-        tags: ['Health'],
-        summary: 'Servis durumu',
-        description: 'JWT veya API key gerektirmez.',
-        responses: {
-          200: {
-            description: 'Servis çalışıyor',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: { status: { type: 'string', example: 'ok' } },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
     // ── Auth ──────────────────────────────────────────────────────────────
     '/auth/register': {
       post: {
@@ -511,11 +593,156 @@ const swaggerDefinition = {
         },
       },
     },
+    // ── Services ──────────────────────────────────────────────────────────
+    '/projects/{projectId}/services': {
+      get: {
+        tags: ['Services'],
+        summary: 'Proje servislerini listele',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Servis listesi',
+            content: {
+              'application/json': {
+                schema: { type: 'array', items: { $ref: '#/components/schemas/ServiceResponse' } },
+              },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+      post: {
+        tags: ['Services'],
+        summary: 'Yeni servis kimliği oluştur',
+        description: 'Plaintext svc_live_ key yalnızca bu yanıtta döner — sonradan erişilemez.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CreateServiceRequest' } },
+          },
+        },
+        responses: {
+          201: {
+            description: 'Servis oluşturuldu',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreatedServiceResponse' },
+              },
+            },
+          },
+          400: {
+            description: 'Validation hatası veya servis adı zaten kullanımda',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+    },
+    '/projects/{projectId}/services/{serviceId}': {
+      delete: {
+        tags: ['Services'],
+        summary: 'Servis kimliğini iptal et (revoke)',
+        description: "Revocation anlıktır — Redis verification cache'i temizlenir.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'serviceId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          204: { description: 'Servis iptal edildi' },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Servis zaten iptal edilmiş',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Servis bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+    },
+    // ── Stats ──────────────────────────────────────────────────────────────
+    '/projects/{projectId}/stats': {
+      get: {
+        tags: ['Stats'],
+        summary: 'Proje kullanım istatistikleri',
+        description:
+          'Verification eventleri üzerinden aggregate sorgular çalıştırır. Dashboard real-time değildir.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'range',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['1d', '7d', '30d'], default: '7d' },
+            description: 'İstatistik aralığı',
+          },
+        ],
+        responses: {
+          200: {
+            description: 'İstatistik verisi',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ProjectStatsResponse' } },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+    },
     // ── Verification ──────────────────────────────────────────────────────
     '/verify': {
       post: {
         tags: ['Verification'],
-        summary: 'API key doğrula',
+        summary: 'API key doğrula (sk_live_)',
         description:
           "Korunan API'ler bu endpoint'i çağırır. JWT gerekmez — sk_live_ formatında API key gerektirir. Altyapı hatası durumunda fail-closed davranır (valid: false).",
         security: [{ apiKeyAuth: [] }],
@@ -542,6 +769,81 @@ const swaggerDefinition = {
             description: 'Rate limit aşıldı',
             content: {
               'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } },
+            },
+          },
+        },
+      },
+    },
+    '/verify/service': {
+      post: {
+        tags: ['Verification'],
+        summary: 'Service key doğrula (svc_live_)',
+        description:
+          "Microservice'ler arası doğrulama. JWT gerekmez — svc_live_ formatında service key gerektirir. sk_live_ key bu endpoint'te geçersizdir. Fail-closed davranır.",
+        security: [{ serviceKeyAuth: [] }],
+        responses: {
+          200: {
+            description: 'Geçerli service key',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyServiceSuccess' } },
+            },
+          },
+          401: {
+            description: 'Geçersiz veya eksik key',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyServiceFailure' } },
+            },
+          },
+          403: {
+            description: 'İptal edilmiş servis',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyServiceFailure' } },
+            },
+          },
+          429: {
+            description: 'Rate limit aşıldı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyServiceFailure' } },
+            },
+          },
+        },
+      },
+    },
+    // ── Health ────────────────────────────────────────────────────────────
+    '/health': {
+      get: {
+        tags: ['Health'],
+        summary: 'Servis ve bağımlılık durumu',
+        description: 'MongoDB ve Redis bağlantısını da kontrol eder. JWT veya API key gerektirmez.',
+        responses: {
+          200: {
+            description: 'Tüm bağımlılıklar sağlıklı',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', enum: ['ok', 'degraded'], example: 'ok' },
+                    mongo: { type: 'string', enum: ['ok', 'error'], example: 'ok' },
+                    redis: { type: 'string', enum: ['ok', 'error'], example: 'ok' },
+                  },
+                },
+              },
+            },
+          },
+          503: {
+            description: 'En az bir bağımlılık erişilemiyor',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', example: 'degraded' },
+                    mongo: { type: 'string', example: 'error' },
+                    redis: { type: 'string', example: 'ok' },
+                  },
+                },
+              },
             },
           },
         },

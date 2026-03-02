@@ -204,7 +204,38 @@ DELETE /v1/projects/:projectId/keys/:keyId
 GET    /v1/projects/:projectId/services
 POST   /v1/projects/:projectId/services
 DELETE /v1/projects/:projectId/services/:serviceId
+
+# Stats
+GET    /v1/projects/:projectId/stats?range=7d
 ```
+
+### `GET /v1/health` — Deep Health Check
+
+**All healthy (200)**
+```json
+{ "status": "ok", "mongo": "ok", "redis": "ok" }
+```
+
+**Degraded (503)**
+```json
+{ "status": "degraded", "mongo": "ok", "redis": "error" }
+```
+
+### `GET /v1/projects/:projectId/stats` — Usage Statistics
+
+**Success (200)**
+```json
+{
+  "totalRequests": 1204,
+  "successRate": 0.97,
+  "topKeys": [{ "keyId": "...", "requests": 842 }],
+  "requestsByDay": [{ "date": "2026-03-01", "count": 310, "errors": 9 }],
+  "rateLimitHits": 12,
+  "avgLatencyMs": 3.2
+}
+```
+
+Supports `range` query param: `1d`, `7d` (default), `30d`.
 
 ---
 
@@ -253,6 +284,7 @@ elyzor/
 │   ├── services/          # svc_live_ credentials (internal microservices)
 │   ├── verification/      # POST /v1/verify
 │   ├── verify-service/    # POST /v1/verify/service
+│   ├── stats/             # GET /v1/projects/:id/stats
 │   ├── usage/
 │   ├── middleware/
 │   └── config/
@@ -279,10 +311,12 @@ elyzor/
 - [x] Refresh token rotation with theft detection
 - [x] Multi-layer rate limiting (IP + key-based)
 - [x] Token blacklisting on logout
+- [x] Usage statistics (`GET /v1/projects/:id/stats`)
+- [x] Deep health check (MongoDB + Redis probe)
+- [x] Graceful shutdown (SIGTERM/SIGINT)
 
 **V2**
 - [ ] Web dashboard
-- [ ] Analytics
 - [ ] Project roles & team access
 
 **V3**
