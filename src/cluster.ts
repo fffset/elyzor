@@ -25,6 +25,23 @@ function startWorker(): void {
   );
 }
 
+function shutdownPrimary(signal: string): void {
+  logPrimary(`${signal} alındı — tüm worker'lar kapatılıyor`);
+
+  const workers = Object.values(cluster.workers ?? {});
+  workers.forEach((worker) => {
+    if (worker && !worker.isDead()) {
+      worker.kill(signal);
+    }
+  });
+
+  // Worker'ların kapanmasını bekle (maks 15 saniye)
+  setTimeout(() => {
+    logPrimary("Worker'lar zaman aşımında kapanmadı — zorla çıkılıyor");
+    process.exit(1);
+  }, 15_000).unref();
+}
+
 function monitorWorkerMemory(workerId: number): void {
   const interval = setInterval(() => {
     if (!cluster.workers) {
@@ -49,7 +66,9 @@ function monitorWorkerMemory(workerId: number): void {
 
 if (cluster.isPrimary) {
   logPrimary(`Sistem: ${CPU_COUNT} CPU çekirdeği | ${TOTAL_RAM_MB} MB toplam RAM`);
-  logPrimary(`Worker başına RAM payı: ${RAM_PER_WORKER_MB} MB | Uyarı eşiği: ${RAM_WARN_THRESHOLD_MB} MB`);
+  logPrimary(
+    `Worker başına RAM payı: ${RAM_PER_WORKER_MB} MB | Uyarı eşiği: ${RAM_WARN_THRESHOLD_MB} MB`
+  );
   logPrimary(`${CPU_COUNT} worker başlatılıyor...`);
 
   for (let i = 0; i < CPU_COUNT; i++) {
@@ -78,9 +97,17 @@ if (cluster.isPrimary) {
 
   cluster.on('exit', (worker, code, signal) => {
     const reason = signal ?? `exit code ${code}`;
+    // SIGTERM/SIGINT ile kapatılan worker'lar yeniden başlatılmaz
+    if (signal === 'SIGTERM' || signal === 'SIGINT') {
+      logPrimary(`Worker #${worker.id} sinyal ile kapatıldı (${reason}) — yeniden başlatılmıyor`);
+      return;
+    }
     logPrimary(`Worker #${worker.id} kapandı (${reason}) — yeniden başlatılıyor...`);
     startWorker();
   });
+
+  process.on('SIGTERM', () => shutdownPrimary('SIGTERM'));
+  process.on('SIGINT', () => shutdownPrimary('SIGINT'));
 } else {
   // Worker process: uygulamayı yükle
   const workerId = cluster.worker?.id ?? 0;

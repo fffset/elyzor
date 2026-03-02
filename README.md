@@ -342,7 +342,7 @@ npm run test:integration
 
 **Unit tests** mock Redis and MongoDB — no external dependencies. Coverage is enforced at push time via Husky: 80% statements/lines, 75% branches/functions.
 
-**Integration tests** run against real services and must run serially (`--runInBand`) to avoid database state conflicts between suites.
+**Integration tests** run against real services and must run serially (`--runInBand`) to avoid database state conflicts between suites. Suites: `auth`, `projects`, `apikeys`, `verification`, `services`, `verify-service`, `stats`, `health`.
 
 ---
 

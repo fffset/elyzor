@@ -332,8 +332,8 @@ elyzor/
 │   │   ├── env.ts
 │   │   └── swagger.ts                # OpenAPI 3.0 spec
 │   ├── app.ts
-│   ├── index.ts
-│   └── cluster.ts                    # production entrypoint
+│   ├── index.ts                      # SIGTERM/SIGINT + graceful shutdown
+│   └── cluster.ts                    # production entrypoint — primary shutdown propagation
 ├── tests/
 │   ├── unit/
 │   └── integration/
@@ -999,3 +999,5 @@ npm run format
 - `src/index.ts` SIGTERM ve SIGINT sinyallerini yakalar. Shutdown akışı: `server.close()` → `mongoose.disconnect()` → `redis.quit()`. 10 saniye içinde tamamlanmazsa `process.exit(1)`.
 - `src/stats/` modülü verification path'inden bağımsızdır. `UsageRepository.getStats()` üç paralel aggregate çalıştırır — bu sorgular yavaş olabilir, doğrulama gecikmeyi etkilemez.
 - Stats endpoint `range` query param alır: `1d`, `7d` (varsayılan), `30d`. Geçersiz değer sessizce `7d`'ye düşürülür — 400 fırlatılmaz.
+- `src/cluster.ts` primary SIGTERM/SIGINT alınca tüm worker'lara sinyali iletir. Worker SIGTERM ile kapandığında `exit` handler'da yeniden başlatılmaz. 15 saniye timeout.
+- Integration testleri: `auth`, `projects`, `apikeys`, `verification`, `services`, `verify-service`, `stats`, `health`. Tümü `--runInBand` ile serially koşar.
