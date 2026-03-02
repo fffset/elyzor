@@ -11,6 +11,7 @@ import statsRouter from './stats/stats.router';
 import verificationRouter from './verification/verification.router';
 import verifyServiceRouter from './verify-service/verify-service.router';
 import { errorHandler } from './middleware/errorHandler';
+import { ipRateLimiter } from './middleware/rateLimiter';
 import { swaggerOptions } from './config/swagger';
 import redis from './config/redis';
 
@@ -19,14 +20,17 @@ const app = express();
 app.use(express.json({ limit: '16kb' }));
 app.use(cookieParser());
 
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+if (process.env.NODE_ENV !== 'production') {
+  const swaggerSpec = swaggerJsdoc(swaggerOptions);
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 app.use('/v1/auth', authRouter);
 app.use('/v1/projects', projectsRouter);
 app.use('/v1/projects/:projectId/keys', apiKeysRouter);
 app.use('/v1/projects/:projectId/services', servicesRouter);
 app.use('/v1/projects/:projectId/stats', statsRouter);
+app.use('/v1/verify', ipRateLimiter);
 app.use('/v1/verify/service', verifyServiceRouter);
 app.use('/v1/verify', verificationRouter);
 

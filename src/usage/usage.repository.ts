@@ -30,7 +30,7 @@ export class UsageRepository {
   async getStats(projectId: string, since: Date): Promise<StatsAggregate> {
     const projectOid = new Types.ObjectId(projectId);
 
-    const [summary, byDay, topKeys] = await Promise.all([
+    const [summary, byDay, topApiKeys, topServiceKeys] = await Promise.all([
       // toplam, başarı sayısı, rate limit ve ortalama gecikme
       UsageModel.aggregate([
         { $match: { projectId: projectOid, timestamp: { $gte: since } } },
@@ -66,7 +66,7 @@ export class UsageRepository {
         { $sort: { _id: 1 } },
       ]),
 
-      // en çok kullanan top 5 key
+      // en çok kullanan top 5 API key
       UsageModel.aggregate([
         {
           $match: {
@@ -79,11 +79,38 @@ export class UsageRepository {
         { $sort: { requests: -1 } },
         { $limit: 5 },
       ]),
+
+      // en çok kullanan top 5 service key
+      UsageModel.aggregate([
+        {
+          $match: {
+            projectId: projectOid,
+            timestamp: { $gte: since },
+            serviceId: { $exists: true, $ne: null },
+          },
+        },
+        { $group: { _id: '$serviceId', requests: { $sum: 1 } } },
+        { $sort: { requests: -1 } },
+        { $limit: 5 },
+      ]),
     ]);
 
     const s = summary[0] as
       | { totalRequests: number; successCount: number; rateLimitHits: number; avgLatencyMs: number }
       | undefined;
+
+    // apiKeyId ve serviceId sonuçlarını birleştir, tekrar sırala, top 5 al
+    const allKeys = [
+      ...(topApiKeys as Array<{ _id: Types.ObjectId; requests: number }>).map((k) => ({
+        keyId: k._id.toString(),
+        requests: k.requests,
+      })),
+      ...(topServiceKeys as Array<{ _id: Types.ObjectId; requests: number }>).map((k) => ({
+        keyId: k._id.toString(),
+        requests: k.requests,
+      })),
+    ];
+    allKeys.sort((a, b) => b.requests - a.requests);
 
     return {
       totalRequests: s?.totalRequests ?? 0,
@@ -95,10 +122,7 @@ export class UsageRepository {
         count: b.count,
         errors: b.errors,
       })),
-      topKeys: (topKeys as Array<{ _id: Types.ObjectId; requests: number }>).map((k) => ({
-        keyId: k._id.toString(),
-        requests: k.requests,
-      })),
+      topKeys: allKeys.slice(0, 5),
     };
   }
 }

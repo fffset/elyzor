@@ -10,7 +10,7 @@
     "start": "node dist/cluster.js",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
-    "test": "jest",
+    "test": "jest --runInBand",
     "test:unit": "jest tests/unit",
     "test:integration": "jest tests/integration --runInBand",
     "prepare": "husky"
