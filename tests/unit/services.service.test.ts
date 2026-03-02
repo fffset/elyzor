@@ -174,4 +174,54 @@ describe('ServicesService', () => {
       expect(projectSvc.assertOwnership).toHaveBeenCalledWith('user1', 'proj1');
     });
   });
+
+  // ── rotateService ─────────────────────────────────────────────────────────────
+
+  describe('rotateService', () => {
+    it('servis bulunamazsa NotFoundError firlatir', async () => {
+      repo.findByIdAndProject.mockResolvedValue(null);
+      await expect(service.rotateService('user1', 'proj1', 'svc1')).rejects.toThrow(NotFoundError);
+    });
+
+    it('servis zaten revoke edilmisse ForbiddenError firlatir', async () => {
+      repo.findByIdAndProject.mockResolvedValue({ ...baseService, revokedAt: new Date() } as never);
+      await expect(service.rotateService('user1', 'proj1', 'svc1')).rejects.toThrow(ForbiddenError);
+    });
+
+    it('yeni key svc_live_ prefix ile olusturulur', async () => {
+      repo.findByIdAndProject.mockResolvedValue(baseService as never);
+      repo.create.mockResolvedValue(baseService as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      const result = await service.rotateService('user1', 'proj1', 'svc1');
+      expect(result.key).toMatch(/^svc_live_/);
+    });
+
+    it('eski servis revoke edilir', async () => {
+      repo.findByIdAndProject.mockResolvedValue(baseService as never);
+      repo.create.mockResolvedValue(baseService as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      await service.rotateService('user1', 'proj1', 'svc1');
+      expect(repo.revoke).toHaveBeenCalledWith('svc1', 'proj1');
+    });
+
+    it('eski servis Redis cache temizlenir', async () => {
+      repo.findByIdAndProject.mockResolvedValue(baseService as never);
+      repo.create.mockResolvedValue(baseService as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      await service.rotateService('user1', 'proj1', 'svc1');
+      expect(mockRedis.del).toHaveBeenCalledWith(`svckey:${baseService.keyHash}`);
+    });
+
+    it('yeni servis ayni ismi korur', async () => {
+      repo.findByIdAndProject.mockResolvedValue(baseService as never);
+      repo.create.mockResolvedValue({ ...baseService, name: 'api-gateway' } as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      const result = await service.rotateService('user1', 'proj1', 'svc1');
+      expect(result.name).toBe('api-gateway');
+    });
+  });
 });

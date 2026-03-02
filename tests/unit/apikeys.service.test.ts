@@ -5,6 +5,14 @@ import { NotFoundError, ForbiddenError } from '../../src/errors';
 
 jest.mock('../../src/apikeys/apikeys.repository');
 jest.mock('../../src/projects/projects.service');
+jest.mock('../../src/config/redis', () => ({
+  __esModule: true,
+  default: { del: jest.fn() },
+}));
+
+import redis from '../../src/config/redis';
+
+const mockRedis = redis as jest.Mocked<typeof redis>;
 
 const baseKey = {
   _id: { toString: () => 'newkeyid' },
@@ -27,6 +35,7 @@ describe('ApiKeyService', () => {
     jest.clearAllMocks();
     service = new ApiKeyService();
     projectSvc.assertOwnership.mockResolvedValue({} as never);
+    (mockRedis.del as jest.Mock).mockResolvedValue(1);
   });
 
   describe('listKeys', () => {
@@ -125,6 +134,54 @@ describe('ApiKeyService', () => {
 
       await service.revokeKey('user1', 'proj1', 'key1');
       expect(projectSvc.assertOwnership).toHaveBeenCalledWith('user1', 'proj1');
+    });
+  });
+
+  describe('rotateKey', () => {
+    it('key bulunamazsa NotFoundError firlatir', async () => {
+      repo.findByIdAndProject.mockResolvedValue(null);
+      await expect(service.rotateKey('user1', 'proj1', 'key1')).rejects.toThrow(NotFoundError);
+    });
+
+    it('key zaten revoke edilmisse ForbiddenError firlatir', async () => {
+      repo.findByIdAndProject.mockResolvedValue({ ...baseKey, revoked: true } as never);
+      await expect(service.rotateKey('user1', 'proj1', 'key1')).rejects.toThrow(ForbiddenError);
+    });
+
+    it('yeni key sk_live_ prefix ile olusturulur', async () => {
+      repo.findByIdAndProject.mockResolvedValue({ ...baseKey, secretHash: 'oldhash' } as never);
+      repo.create.mockResolvedValue(baseKey as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      const result = await service.rotateKey('user1', 'proj1', 'key1');
+      expect(result.key).toMatch(/^sk_live_/);
+    });
+
+    it('eski key revoke edilir', async () => {
+      repo.findByIdAndProject.mockResolvedValue({ ...baseKey, secretHash: 'oldhash' } as never);
+      repo.create.mockResolvedValue(baseKey as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      await service.rotateKey('user1', 'proj1', 'key1');
+      expect(repo.revoke).toHaveBeenCalledWith('key1', 'proj1');
+    });
+
+    it('eski key Redis cache temizlenir', async () => {
+      repo.findByIdAndProject.mockResolvedValue({ ...baseKey, secretHash: 'oldhash' } as never);
+      repo.create.mockResolvedValue(baseKey as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      await service.rotateKey('user1', 'proj1', 'key1');
+      expect(mockRedis.del).toHaveBeenCalledWith('apikey:oldhash');
+    });
+
+    it('yeni key label korunur', async () => {
+      repo.findByIdAndProject.mockResolvedValue({ ...baseKey, label: 'prod', secretHash: 'oldhash' } as never);
+      repo.create.mockResolvedValue({ ...baseKey, label: 'prod' } as never);
+      repo.revoke.mockResolvedValue(undefined as never);
+
+      const result = await service.rotateKey('user1', 'proj1', 'key1');
+      expect(result.label).toBe('prod');
     });
   });
 });

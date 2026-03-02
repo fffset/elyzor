@@ -878,7 +878,7 @@ npm run test:integration             # integration testler (Docker gerektirir, -
 **Test kuralları:**
 - Unit testler Redis ve MongoDB'yi mock'lar
 - Integration testler gerçek Docker servislerini kullanır; `--runInBand` ile serially koşar
-- Her service metodunun karşılığında bir unit test bulunur
+- Her service metodunun karşılığında bir unit test bulunur — **yeni metot eklenince aynı commit'te testi de yazılır**
 - Verification akışının uçtan uca integration coverage'ı olur
 - Implementation detaylarını değil, davranışı test et
 - `ts-jest` kullanılır — test dosyaları da `.ts` uzantılıdır

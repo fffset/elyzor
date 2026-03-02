@@ -17,6 +17,11 @@ module.exports = {
     '!src/**/*.repository.ts',
     // DTO siniflari — dekoratör tabanli, davranis yok
     '!src/**/dtos/*.ts',
+    // Middleware'ler — integration testlerinde kapsamlanır
+    '!src/middleware/rateLimiter.ts',
+    '!src/middleware/requestId.ts',
+    // Error sınıfları — default parametre branch'leri, iş mantığı yok
+    '!src/errors/*.ts',
   ],
   coverageDirectory: 'coverage',
   coverageThreshold: {
