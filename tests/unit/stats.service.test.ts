@@ -138,7 +138,7 @@ describe('StatsService', () => {
         rateLimitHits: 8,
         avgLatencyMs: 3.5,
         requestsByDay: [{ date: '2026-03-01', count: 100, errors: 3 }],
-        topKeys: [{ keyId: 'key1', requests: 200 }],
+        topKeys: [{ keyId: 'key1', keyType: 'api' as const, requests: 200 }],
       });
 
       const result = await service.getProjectStats('user1', 'proj1', '7d');
@@ -150,6 +150,7 @@ describe('StatsService', () => {
       expect(result.requestsByDay[0].date).toBe('2026-03-01');
       expect(result.topKeys).toHaveLength(1);
       expect(result.topKeys[0].keyId).toBe('key1');
+      expect(result.topKeys[0].keyType).toBe('api');
     });
 
     it('projectId usageRepo.getStats e iletilir', async () => {

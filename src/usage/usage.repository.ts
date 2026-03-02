@@ -10,6 +10,7 @@ export interface DayBucket {
 
 export interface TopKey {
   keyId: string;
+  keyType: 'api' | 'service';
   requests: number;
 }
 
@@ -104,13 +105,15 @@ export class UsageRepository {
       | undefined;
 
     // apiKeyId ve serviceId sonuçlarını birleştir, tekrar sırala, top 5 al
-    const allKeys = [
+    const allKeys: TopKey[] = [
       ...(topApiKeys as Array<{ _id: Types.ObjectId; requests: number }>).map((k) => ({
         keyId: k._id.toString(),
+        keyType: 'api' as const,
         requests: k.requests,
       })),
       ...(topServiceKeys as Array<{ _id: Types.ObjectId; requests: number }>).map((k) => ({
         keyId: k._id.toString(),
+        keyType: 'service' as const,
         requests: k.requests,
       })),
     ];
