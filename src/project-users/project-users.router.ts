@@ -4,6 +4,8 @@ import { platformGuard } from '../middleware/platformGuard';
 import { validateDto } from '../middleware/validateDto';
 import { RegisterProjectUserDto } from './dtos/register-project-user.dto';
 import { LoginProjectUserDto } from './dtos/login-project-user.dto';
+import { LogoutProjectUserDto } from './dtos/logout-project-user.dto';
+import { LogoutAllProjectUserDto } from './dtos/logout-all-project-user.dto';
 import { REFRESH_COOKIE } from '../auth/auth.service';
 
 const router = Router({ mergeParams: true });
@@ -50,6 +52,62 @@ router.post(
       );
       res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
       res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/refresh',
+  platformGuard,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rawRefreshToken: string | undefined = req.cookies?.[REFRESH_COOKIE];
+      const { accessToken, refreshToken } = await projectUserService.refresh(
+        rawRefreshToken,
+        req.params.projectId
+      );
+      res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+      res.json({ accessToken });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/logout',
+  platformGuard,
+  validateDto(LogoutProjectUserDto),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const dto: LogoutProjectUserDto = req.body as LogoutProjectUserDto;
+      const rawRefreshToken: string | undefined = req.cookies?.[REFRESH_COOKIE];
+      await projectUserService.logout(dto.accessToken, rawRefreshToken);
+      res.clearCookie(REFRESH_COOKIE);
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/logout-all',
+  platformGuard,
+  validateDto(LogoutAllProjectUserDto),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const dto: LogoutAllProjectUserDto = req.body as LogoutAllProjectUserDto;
+      await projectUserService.logoutAll(
+        req.userId as string,
+        req.params.projectId,
+        dto.userId,
+        dto.accessToken
+      );
+      res.clearCookie(REFRESH_COOKIE);
+      res.status(204).send();
     } catch (err) {
       next(err);
     }

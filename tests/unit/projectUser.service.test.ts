@@ -2,7 +2,7 @@ import { ProjectUserService } from '../../src/project-users/project-users.servic
 import { ProjectUserRepository } from '../../src/project-users/project-users.repository';
 import { AuthRepository } from '../../src/auth/auth.repository';
 import { ProjectService } from '../../src/projects/projects.service';
-import { ValidationError, UnauthorizedError } from '../../src/errors';
+import { ValidationError, UnauthorizedError, NotFoundError, ForbiddenError } from '../../src/errors';
 import bcrypt from 'bcrypt';
 
 jest.mock('../../src/project-users/project-users.repository');
@@ -10,7 +10,7 @@ jest.mock('../../src/auth/auth.repository');
 jest.mock('../../src/projects/projects.service');
 jest.mock('../../src/config/redis', () => ({
   __esModule: true,
-  default: { get: jest.fn(), setex: jest.fn() },
+  default: { get: jest.fn(), setex: jest.fn(), del: jest.fn() },
 }));
 jest.mock('../../src/auth/services/token.service', () => ({
   generateProjectUserAccessToken: jest.fn().mockReturnValue('mock_project_access_token'),
@@ -18,6 +18,9 @@ jest.mock('../../src/auth/services/token.service', () => ({
 jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('hashed_password'),
   compare: jest.fn(),
+}));
+jest.mock('jsonwebtoken', () => ({
+  decode: jest.fn().mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 900 }),
 }));
 
 const projectUserRepo = (ProjectUserRepository as jest.MockedClass<typeof ProjectUserRepository>).mock.instances[0] as jest.Mocked<ProjectUserRepository>;
@@ -29,6 +32,14 @@ const mockProjectUser = {
   email: 'alice@test.com',
   projectId: { toString: () => 'proj1' },
   passwordHash: 'hashed_password',
+};
+
+const mockStoredToken = {
+  userId: { toString: () => 'projectuser123' },
+  tokenHash: 'somehash',
+  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  revokedAt: null,
+  userType: 'project' as const,
 };
 
 describe('ProjectUserService', () => {
@@ -143,6 +154,158 @@ describe('ProjectUserService', () => {
       expect(authRepo.createRefreshToken).toHaveBeenCalledWith(
         expect.objectContaining({ userType: 'project' })
       );
+    });
+  });
+
+  describe('refresh', () => {
+    it('rawRefreshToken yoksa UnauthorizedError firlatir', async () => {
+      await expect(service.refresh(undefined, 'proj1')).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('DB\'de token bulunamazsa UnauthorizedError firlatir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue(null);
+
+      await expect(service.refresh('sometoken', 'proj1')).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('token suresi dolmussa UnauthorizedError firlatir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue({
+        ...mockStoredToken,
+        expiresAt: new Date(Date.now() - 1000),
+      } as never);
+
+      await expect(service.refresh('sometoken', 'proj1')).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('revoke edilmis token gelirse token theft → revokeAllUserTokens ve UnauthorizedError', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue({
+        ...mockStoredToken,
+        revokedAt: new Date(),
+      } as never);
+      authRepo.revokeAllUserTokens.mockResolvedValue(undefined as never);
+
+      await expect(service.refresh('sometoken', 'proj1')).rejects.toThrow(UnauthorizedError);
+      expect(authRepo.revokeAllUserTokens).toHaveBeenCalledWith('projectuser123');
+    });
+
+    it('userType platform olan token icin UnauthorizedError firlatir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue({
+        ...mockStoredToken,
+        userType: 'platform',
+      } as never);
+
+      await expect(service.refresh('sometoken', 'proj1')).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('project user bulunamazsa UnauthorizedError firlatir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue(mockStoredToken as never);
+      projectUserRepo.findById.mockResolvedValue(null);
+
+      await expect(service.refresh('sometoken', 'proj1')).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('token farkli projeye aitse UnauthorizedError firlatir', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue(mockStoredToken as never);
+      projectUserRepo.findById.mockResolvedValue({
+        ...mockProjectUser,
+        projectId: { toString: () => 'OTHER_PROJECT' },
+      } as never);
+
+      await expect(service.refresh('sometoken', 'proj1')).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('basarili refresh → eski token revoke edilir, yeni token cifti doner', async () => {
+      authRepo.findRefreshTokenAny.mockResolvedValue(mockStoredToken as never);
+      projectUserRepo.findById.mockResolvedValue(mockProjectUser as never);
+      authRepo.revokeRefreshToken.mockResolvedValue(undefined as never);
+
+      const result = await service.refresh('sometoken', 'proj1');
+
+      expect(authRepo.revokeRefreshToken).toHaveBeenCalled();
+      expect(authRepo.createRefreshToken).toHaveBeenCalledWith(
+        expect.objectContaining({ userType: 'project', userId: 'projectuser123' })
+      );
+      expect(result.accessToken).toBe('mock_project_access_token');
+      expect(result.refreshToken.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('logout', () => {
+    it('access token blacklist\'e eklenir', async () => {
+      const redis = (await import('../../src/config/redis')).default as jest.Mocked<typeof import('../../src/config/redis').default>;
+
+      await service.logout('mock_access_token', undefined);
+
+      expect(redis.setex).toHaveBeenCalled();
+    });
+
+    it('refresh token varsa revoke edilir', async () => {
+      authRepo.revokeRefreshToken.mockResolvedValue(undefined as never);
+
+      await service.logout('mock_access_token', 'somerefreshtoken');
+
+      expect(authRepo.revokeRefreshToken).toHaveBeenCalled();
+    });
+
+    it('refresh token yoksa revokeRefreshToken cagirilmaz', async () => {
+      await service.logout('mock_access_token', undefined);
+
+      expect(authRepo.revokeRefreshToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('logoutAll', () => {
+    it('ownership check basarisizsa hata firlatir', async () => {
+      projectSvc.assertOwnership.mockRejectedValue(new Error('Proje bulunamadı'));
+
+      await expect(
+        service.logoutAll('platform123', 'proj1', 'projectuser123', 'mock_access_token')
+      ).rejects.toThrow();
+    });
+
+    it('project user bulunamazsa NotFoundError firlatir', async () => {
+      projectSvc.assertOwnership.mockResolvedValue(undefined as never);
+      projectUserRepo.findById.mockResolvedValue(null);
+
+      await expect(
+        service.logoutAll('platform123', 'proj1', 'projectuser123', 'mock_access_token')
+      ).rejects.toThrow(NotFoundError);
+    });
+
+    it('kullanici baska projeye aitse ForbiddenError firlatir', async () => {
+      projectSvc.assertOwnership.mockResolvedValue(undefined as never);
+      projectUserRepo.findById.mockResolvedValue({
+        ...mockProjectUser,
+        projectId: { toString: () => 'OTHER_PROJECT' },
+      } as never);
+
+      await expect(
+        service.logoutAll('platform123', 'proj1', 'projectuser123', 'mock_access_token')
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it('basarili logoutAll → access token blacklist\'e eklenir ve tum tokenlar revoke edilir', async () => {
+      projectSvc.assertOwnership.mockResolvedValue(undefined as never);
+      projectUserRepo.findById.mockResolvedValue(mockProjectUser as never);
+      authRepo.revokeAllUserTokens.mockResolvedValue(undefined as never);
+      const redis = (await import('../../src/config/redis')).default as jest.Mocked<typeof import('../../src/config/redis').default>;
+
+      await service.logoutAll('platform123', 'proj1', 'projectuser123', 'mock_access_token');
+
+      expect(redis.setex).toHaveBeenCalled();
+      expect(authRepo.revokeAllUserTokens).toHaveBeenCalledWith('projectuser123');
+    });
+
+    it('cross-project korumasi: baska projedeki kullanici reddedilir', async () => {
+      projectSvc.assertOwnership.mockResolvedValue(undefined as never);
+      projectUserRepo.findById.mockResolvedValue({
+        ...mockProjectUser,
+        projectId: { toString: () => 'proj2' },
+      } as never);
+
+      await expect(
+        service.logoutAll('platform123', 'proj1', 'projectuser123', 'mock_access_token')
+      ).rejects.toThrow(ForbiddenError);
     });
   });
 });

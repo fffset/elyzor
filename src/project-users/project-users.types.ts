@@ -17,3 +17,7 @@ export interface ProjectUserRegisterResponse {
 export interface ProjectUserLoginResponse {
   accessToken: string;
 }
+
+export interface ProjectUserRefreshResponse {
+  accessToken: string;
+}

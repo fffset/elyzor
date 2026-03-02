@@ -192,6 +192,44 @@ const swaggerDefinition = {
           },
         },
       },
+      ProjectUserRefreshResponse: {
+        type: 'object',
+        description:
+          'Eski refresh token revoke edilir, yeni token çifti verilir (rotation). Yeni refresh token HTTP-only cookie olarak set edilir.',
+        properties: {
+          accessToken: {
+            type: 'string',
+            description: 'Yeni project user JWT (userType: project, projectId claim içerir)',
+          },
+        },
+      },
+      LogoutProjectUserRequest: {
+        type: 'object',
+        required: ['accessToken'],
+        properties: {
+          accessToken: {
+            type: 'string',
+            description: "Blacklist'e eklenecek project user access token'ı",
+            maxLength: 512,
+          },
+        },
+      },
+      LogoutAllProjectUserRequest: {
+        type: 'object',
+        required: ['userId', 'accessToken'],
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'Tüm oturumları kapatılacak project user ID',
+            maxLength: 100,
+          },
+          accessToken: {
+            type: 'string',
+            description: "Blacklist'e eklenecek mevcut project user access token'ı",
+            maxLength: 512,
+          },
+        },
+      },
       // ── Errors ──────────────────────────────────────────────────────────
       ValidationError: {
         type: 'object',
@@ -654,6 +692,110 @@ const swaggerDefinition = {
           },
           404: {
             description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
+        },
+      },
+    },
+    '/projects/{projectId}/auth/refresh': {
+      post: {
+        tags: ['Project Users'],
+        summary: 'Project user access token yenile',
+        description:
+          "XYZ Backend, HTTP-only cookie'deki project user refresh token ile yeni access token alır. Her çağrıda eski token revoke edilip yeni token çifti verilir (rotation). Revoke edilmiş token gelirse tüm oturumlar kapatılır (token theft detection). Token bu projeye ait olmalıdır.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: "Yeni token çifti. Yeni refresh token HTTP-only cookie'de.",
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ProjectUserRefreshResponse' },
+              },
+            },
+          },
+          401: {
+            description: 'Platform token gerekli veya geçersiz/süresi dolmuş refresh token',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+        },
+      },
+    },
+    '/projects/{projectId}/auth/logout': {
+      post: {
+        tags: ['Project Users'],
+        summary: 'Project user çıkış yap',
+        description:
+          "XYZ Backend, belirtilen project user access token'ını blacklist'e ekler ve refresh token'ı iptal eder.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/LogoutProjectUserRequest' },
+            },
+          },
+        },
+        responses: {
+          204: { description: 'Çıkış başarılı' },
+          400: {
+            description: 'Validation hatası',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Platform token gerekli (userType: platform)',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+        },
+      },
+    },
+    '/projects/{projectId}/auth/logout-all': {
+      post: {
+        tags: ['Project Users'],
+        summary: 'Project user tüm oturumlardan çıkış yap',
+        description:
+          "XYZ Backend, belirtilen project user'ın tüm refresh token'larını iptal eder ve mevcut access token'ını blacklist'e ekler. Kullanıcı mobil, web gibi tüm cihazlardan çıkmış olur.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/LogoutAllProjectUserRequest' },
+            },
+          },
+        },
+        responses: {
+          204: { description: 'Tüm oturumlar sonlandırıldı' },
+          400: {
+            description: 'Validation hatası',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Platform token gerekli (userType: platform)',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Belirtilen kullanıcı bu projeye ait değil',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Kullanıcı bulunamadı',
             content: {
               'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
             },
