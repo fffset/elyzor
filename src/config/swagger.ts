@@ -14,27 +14,28 @@ const swaggerDefinition = {
         type: 'http',
         scheme: 'bearer',
         bearerFormat: 'JWT',
-        description: 'Platform kullanıcıları için JWT access token',
+        description: 'Platform kullanıcıları için JWT access token (userType: platform)',
       },
       apiKeyAuth: {
         type: 'http',
         scheme: 'bearer',
         bearerFormat: 'API Key',
-        description: 'Doğrulama için sk_live_ prefix\'li API key',
+        description: "Doğrulama için sk_live_ prefix'li API key",
       },
     },
     schemas: {
-      // --- Auth ---
+      // ── Auth ────────────────────────────────────────────────────────────
       RegisterRequest: {
         type: 'object',
         required: ['email', 'password'],
         properties: {
           email: { type: 'string', format: 'email', example: 'user@example.com' },
-          password: { type: 'string', minLength: 8, example: 'mysecret123' },
+          password: { type: 'string', minLength: 8, maxLength: 128, example: 'mysecret123' },
         },
       },
       RegisterResponse: {
         type: 'object',
+        description: "Refresh token HTTP-only cookie olarak set edilir, response body'de dönmez.",
         properties: {
           user: {
             type: 'object',
@@ -43,12 +44,9 @@ const swaggerDefinition = {
               email: { type: 'string', example: 'user@example.com' },
             },
           },
-          token: {
-            type: 'object',
-            properties: {
-              accessToken: { type: 'string' },
-              refreshToken: { type: 'string' },
-            },
+          accessToken: {
+            type: 'string',
+            description: 'Platform JWT (userType: platform, 15 dakika geçerli)',
           },
         },
       },
@@ -62,17 +60,23 @@ const swaggerDefinition = {
       },
       LoginResponse: {
         type: 'object',
+        description: 'Refresh token HTTP-only cookie olarak set edilir.',
         properties: {
-          accessToken: { type: 'string' },
+          accessToken: {
+            type: 'string',
+            description: 'Platform JWT (userType: platform, 15 dakika geçerli)',
+          },
         },
       },
       RefreshResponse: {
         type: 'object',
+        description:
+          'Eski refresh token revoke edilir, yeni token çifti verilir (rotation). Yeni refresh token HTTP-only cookie olarak set edilir.',
         properties: {
           accessToken: { type: 'string' },
         },
       },
-      // --- Projects ---
+      // ── Projects ────────────────────────────────────────────────────────
       CreateProjectRequest: {
         type: 'object',
         required: ['name'],
@@ -90,7 +94,7 @@ const swaggerDefinition = {
           updatedAt: { type: 'string', format: 'date-time' },
         },
       },
-      // --- API Keys ---
+      // ── API Keys ────────────────────────────────────────────────────────
       CreateApiKeyRequest: {
         type: 'object',
         properties: {
@@ -116,14 +120,14 @@ const swaggerDefinition = {
             properties: {
               key: {
                 type: 'string',
-                description: 'Plaintext key — yalnızca bir kez gösterilir.',
+                description: 'Plaintext key — yalnızca bir kez gösterilir, sonradan erişilemez.',
                 example: 'sk_live_abc123.xyz789',
               },
             },
           },
         ],
       },
-      // --- Verification ---
+      // ── Verification ────────────────────────────────────────────────────
       VerifySuccess: {
         type: 'object',
         properties: {
@@ -143,7 +147,7 @@ const swaggerDefinition = {
           retryAfter: { type: 'number', description: 'Yalnızca rate_limit_exceeded hatalarında' },
         },
       },
-      // --- Project Users ---
+      // ── Project Users ───────────────────────────────────────────────────
       ProjectUserRegisterRequest: {
         type: 'object',
         required: ['email', 'password'],
@@ -154,6 +158,7 @@ const swaggerDefinition = {
       },
       ProjectUserRegisterResponse: {
         type: 'object',
+        description: 'Refresh token HTTP-only cookie olarak set edilir.',
         properties: {
           user: {
             type: 'object',
@@ -163,7 +168,10 @@ const swaggerDefinition = {
               projectId: { type: 'string', example: '64f1a...' },
             },
           },
-          accessToken: { type: 'string', description: 'Project user JWT (userType: project)' },
+          accessToken: {
+            type: 'string',
+            description: 'Project user JWT (userType: project, projectId claim içerir)',
+          },
         },
       },
       ProjectUserLoginRequest: {
@@ -176,11 +184,15 @@ const swaggerDefinition = {
       },
       ProjectUserLoginResponse: {
         type: 'object',
+        description: 'Refresh token HTTP-only cookie olarak set edilir.',
         properties: {
-          accessToken: { type: 'string', description: 'Project user JWT (userType: project)' },
+          accessToken: {
+            type: 'string',
+            description: 'Project user JWT (userType: project, projectId claim içerir)',
+          },
         },
       },
-      // --- Errors ---
+      // ── Errors ──────────────────────────────────────────────────────────
       ValidationError: {
         type: 'object',
         properties: {
@@ -195,41 +207,103 @@ const swaggerDefinition = {
           message: { type: 'string', example: 'Kimlik doğrulama gerekli' },
         },
       },
+      ForbiddenError: {
+        type: 'object',
+        properties: {
+          error: { type: 'string', example: 'forbidden' },
+          message: { type: 'string', example: 'Erişim reddedildi' },
+        },
+      },
+      NotFoundError: {
+        type: 'object',
+        properties: {
+          error: { type: 'string', example: 'not_found' },
+          message: { type: 'string', example: 'Bulunamadı' },
+        },
+      },
     },
   },
   paths: {
+    // ── Health ────────────────────────────────────────────────────────────
+    '/health': {
+      get: {
+        tags: ['Health'],
+        summary: 'Servis durumu',
+        description: 'JWT veya API key gerektirmez.',
+        responses: {
+          200: {
+            description: 'Servis çalışıyor',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { status: { type: 'string', example: 'ok' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     // ── Auth ──────────────────────────────────────────────────────────────
     '/auth/register': {
       post: {
         tags: ['Auth'],
-        summary: 'Yeni hesap oluştur',
+        summary: 'Yeni platform hesabı oluştur',
+        description:
+          'Başarıyla kayıt olunca refresh token HTTP-only cookie olarak set edilir. Hata mesajları kullanıcı varlığını teyit etmez (enumeration koruması).',
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/RegisterRequest' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/RegisterRequest' } },
+          },
         },
         responses: {
           201: {
-            description: 'Hesap oluşturuldu. Refresh token HTTP-only cookie olarak set edilir.',
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/RegisterResponse' } } },
+            description: 'Hesap oluşturuldu',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/RegisterResponse' } },
+            },
           },
-          400: { description: 'Validation hatası', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          400: {
+            description: 'Validation hatası',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
         },
       },
     },
     '/auth/login': {
       post: {
         tags: ['Auth'],
-        summary: 'Giriş yap',
+        summary: 'Platform hesabına giriş yap',
+        description: 'Başarıyla giriş yapılınca refresh token HTTP-only cookie olarak set edilir.',
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/LoginRequest' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/LoginRequest' } },
+          },
         },
         responses: {
           200: {
-            description: 'Giriş başarılı. Refresh token HTTP-only cookie olarak set edilir.',
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/LoginResponse' } } },
+            description: 'Giriş başarılı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/LoginResponse' } },
+            },
           },
-          401: { description: 'Geçersiz kimlik bilgileri', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          400: {
+            description: 'Validation hatası',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Geçersiz kimlik bilgileri',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
         },
       },
     },
@@ -237,10 +311,21 @@ const swaggerDefinition = {
       post: {
         tags: ['Auth'],
         summary: 'Access token yenile',
-        description: 'HTTP-only cookie\'deki refresh token kullanılarak yeni access token üretilir.',
+        description:
+          "HTTP-only cookie'deki refresh token ile yeni access token alınır. Her çağrıda eski token revoke edilip yeni token çifti verilir (rotation). Revoke edilmiş token gelirse tüm oturumlar kapatılır (token theft detection).",
         responses: {
-          200: { description: 'Yeni access token', content: { 'application/json': { schema: { $ref: '#/components/schemas/RefreshResponse' } } } },
-          401: { description: 'Geçersiz veya süresi dolmuş refresh token', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          200: {
+            description: "Yeni token çifti. Yeni refresh token HTTP-only cookie'de.",
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/RefreshResponse' } },
+            },
+          },
+          401: {
+            description: 'Geçersiz veya süresi dolmuş refresh token',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
         },
       },
     },
@@ -248,10 +333,17 @@ const swaggerDefinition = {
       post: {
         tags: ['Auth'],
         summary: 'Çıkış yap',
+        description:
+          "Access token Redis blacklist'e eklenir, refresh token silinir, cookie temizlenir.",
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: 'Çıkış başarılı' },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
         },
       },
     },
@@ -259,10 +351,16 @@ const swaggerDefinition = {
       post: {
         tags: ['Auth'],
         summary: 'Tüm cihazlardan çıkış yap',
+        description: "Kullanıcıya ait tüm refresh token'lar silinir.",
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: 'Tüm oturumlar sonlandırıldı' },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
         },
       },
     },
@@ -275,9 +373,18 @@ const swaggerDefinition = {
         responses: {
           200: {
             description: 'Proje listesi',
-            content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/Project' } } } },
+            content: {
+              'application/json': {
+                schema: { type: 'array', items: { $ref: '#/components/schemas/Project' } },
+              },
+            },
           },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
         },
       },
       post: {
@@ -286,12 +393,27 @@ const swaggerDefinition = {
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateProjectRequest' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CreateProjectRequest' } },
+          },
         },
         responses: {
-          201: { description: 'Proje oluşturuldu', content: { 'application/json': { schema: { $ref: '#/components/schemas/Project' } } } },
-          400: { description: 'Validation hatası', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          201: {
+            description: 'Proje oluşturuldu',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Project' } } },
+          },
+          400: {
+            description: 'Validation hatası',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
         },
       },
     },
@@ -303,8 +425,24 @@ const swaggerDefinition = {
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           204: { description: 'Proje silindi' },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
-          404: { description: 'Proje bulunamadı' },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Bu projeye erişim yetkiniz yok',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
         },
       },
     },
@@ -312,15 +450,36 @@ const swaggerDefinition = {
     '/projects/{projectId}/keys': {
       get: {
         tags: ['API Keys'],
-        summary: 'Projenin key\'lerini listele',
+        summary: "Projenin key'lerini listele",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           200: {
             description: 'Key listesi',
-            content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/ApiKeyResponse' } } } },
+            content: {
+              'application/json': {
+                schema: { type: 'array', items: { $ref: '#/components/schemas/ApiKeyResponse' } },
+              },
+            },
           },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Bu projeye erişim yetkiniz yok',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
         },
       },
       post: {
@@ -330,18 +489,45 @@ const swaggerDefinition = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateApiKeyRequest' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CreateApiKeyRequest' } },
+          },
         },
         responses: {
-          201: { description: 'Key oluşturuldu', content: { 'application/json': { schema: { $ref: '#/components/schemas/CreatedApiKeyResponse' } } } },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
+          201: {
+            description: 'Key oluşturuldu',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreatedApiKeyResponse' },
+              },
+            },
+          },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Bu projeye erişim yetkiniz yok',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
         },
       },
     },
     '/projects/{projectId}/keys/{keyId}': {
       delete: {
         tags: ['API Keys'],
-        summary: 'API key\'i iptal et (revoke)',
+        summary: "API key'i iptal et (revoke)",
+        description: "Revocation anlıktır — Redis verification cache'i temizlenir.",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
@@ -349,8 +535,24 @@ const swaggerDefinition = {
         ],
         responses: {
           204: { description: 'Key iptal edildi' },
-          401: { description: 'Token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
-          404: { description: 'Key bulunamadı' },
+          401: {
+            description: 'Token gerekli',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Bu projeye erişim yetkiniz yok veya key zaten iptal edilmiş',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Key bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
         },
       },
     },
@@ -359,21 +561,51 @@ const swaggerDefinition = {
       post: {
         tags: ['Project Users'],
         summary: 'Proje kullanıcısı kayıt et',
-        description: 'Platform kullanıcısı (XYZ Backend), kendi projesine yeni bir son kullanıcı ekler. alice gibi end user\'lar bu endpoint\'i doğrudan çağırmaz — XYZ Backend proxy\'ler.',
+        description:
+          "Platform kullanıcısı (XYZ Backend), kendi projesine yeni bir son kullanıcı ekler. Son kullanıcılar (alice gibi) bu endpoint'i doğrudan çağırmaz — XYZ Backend platform JWT'si ile proxy'ler. Hata mesajları kullanıcı varlığını teyit etmez (enumeration koruması).",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserRegisterRequest' } } },
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ProjectUserRegisterRequest' },
+            },
+          },
         },
         responses: {
           201: {
             description: 'Kullanıcı oluşturuldu. Refresh token HTTP-only cookie olarak set edilir.',
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserRegisterResponse' } } },
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ProjectUserRegisterResponse' },
+              },
+            },
           },
-          400: { description: 'Validation hatası', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-          401: { description: 'Platform token gerekli', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
-          404: { description: 'Proje bulunamadı' },
+          400: {
+            description: 'Validation hatası veya kayıt tamamlanamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Platform token gerekli (userType: platform)',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Bu projeye erişim yetkiniz yok',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
         },
       },
     },
@@ -381,20 +613,51 @@ const swaggerDefinition = {
       post: {
         tags: ['Project Users'],
         summary: 'Proje kullanıcısı giriş yap',
-        description: 'Platform kullanıcısı (XYZ Backend), bir son kullanıcının kimlik bilgilerini doğrular ve proje user token\'ı alır.',
+        description:
+          "Platform kullanıcısı (XYZ Backend), bir son kullanıcının kimlik bilgilerini doğrular ve proje user token'ı alır.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'projectId', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserLoginRequest' } } },
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ProjectUserLoginRequest' },
+            },
+          },
         },
         responses: {
           200: {
             description: 'Giriş başarılı. Refresh token HTTP-only cookie olarak set edilir.',
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/ProjectUserLoginResponse' } } },
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ProjectUserLoginResponse' },
+              },
+            },
           },
-          401: { description: 'Geçersiz kimlik bilgileri veya platform token eksik', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } } } },
-          404: { description: 'Proje bulunamadı' },
+          400: {
+            description: 'Validation hatası',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } },
+            },
+          },
+          401: {
+            description: 'Geçersiz kimlik bilgileri veya platform token eksik',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/UnauthorizedError' } },
+            },
+          },
+          403: {
+            description: 'Bu projeye erişim yetkiniz yok',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForbiddenError' } },
+            },
+          },
+          404: {
+            description: 'Proje bulunamadı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/NotFoundError' } },
+            },
+          },
         },
       },
     },
@@ -403,13 +666,34 @@ const swaggerDefinition = {
       post: {
         tags: ['Verification'],
         summary: 'API key doğrula',
-        description: 'Korunan API\'ler bu endpoint\'i çağırır. JWT gerekmez.',
+        description:
+          "Korunan API'ler bu endpoint'i çağırır. JWT gerekmez — sk_live_ formatında API key gerektirir. Altyapı hatası durumunda fail-closed davranır (valid: false).",
         security: [{ apiKeyAuth: [] }],
         responses: {
-          200: { description: 'Geçerli key', content: { 'application/json': { schema: { $ref: '#/components/schemas/VerifySuccess' } } } },
-          401: { description: 'Geçersiz key', content: { 'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } } } },
-          403: { description: 'İptal edilmiş key', content: { 'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } } } },
-          429: { description: 'Rate limit aşıldı', content: { 'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } } } },
+          200: {
+            description: 'Geçerli key',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifySuccess' } },
+            },
+          },
+          401: {
+            description: 'Geçersiz veya eksik key',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } },
+            },
+          },
+          403: {
+            description: 'İptal edilmiş key',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } },
+            },
+          },
+          429: {
+            description: 'Rate limit aşıldı',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/VerifyFailure' } },
+            },
+          },
         },
       },
     },

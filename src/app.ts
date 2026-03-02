@@ -24,7 +24,7 @@ app.use('/v1/projects/:projectId/keys', apiKeysRouter);
 app.use('/v1/projects/:projectId/auth', projectUsersRouter);
 app.use('/v1/verify', verificationRouter);
 
-app.get('/health', (_req, res) => {
+app.get('/v1/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
