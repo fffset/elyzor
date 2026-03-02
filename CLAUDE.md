@@ -6,7 +6,10 @@ Bu dosya Claude'a bu kod tabanında nasıl çalışması gerektiğini anlatır.
 
 ## Elyzor Nedir?
 
-Elyzor bir **API Authentication Altyapı Servisi**dir. API key'lerini üretir, doğrular ve takip eder — böylece diğer API'ler kendi auth mantığını implement etmek zorunda kalmaz.
+Elyzor bir **API Authentication Altyapı Servisi**dir. İki farklı kimlik tipini üretir, doğrular ve takip eder:
+
+- **API Key** (`sk_live_`) — External client → Backend trust
+- **Service Key** (`svc_live_`) — Microservice → Microservice trust
 
 Korunan bir API'nin yapması gereken tek şey şudur:
 
@@ -17,7 +20,7 @@ if (!valid) return res.status(401).json({ error: "unauthorized" });
 
 Geri kalanını Elyzor halleder: key üretimi, hash'leme, revocation, rate limiting, kullanım loglaması.
 
-**Elyzor asla uygulama trafiğini proxy'lemez.** Sadece "bu key geçerli mi?" sorusunu yanıtlar.
+**Elyzor asla uygulama trafiğini proxy'lemez.** Sadece "bu kimlik geçerli mi?" sorusunu yanıtlar.
 
 ---
 
@@ -276,7 +279,7 @@ elyzor/
 │   │   ├── projects.repository.ts
 │   │   ├── projects.model.ts
 │   │   └── projects.types.ts
-│   ├── apikeys/
+│   ├── apikeys/                      # sk_live_ — external client credentials
 │   │   ├── dtos/
 │   │   │   └── create-apikey.dto.ts
 │   │   ├── apikeys.router.ts
@@ -284,17 +287,29 @@ elyzor/
 │   │   ├── apikeys.repository.ts
 │   │   ├── apikeys.model.ts
 │   │   └── apikeys.types.ts
-│   ├── verification/
+│   ├── services/                     # svc_live_ — microservice identity credentials
+│   │   ├── dtos/
+│   │   │   └── create-service.dto.ts
+│   │   ├── services.router.ts
+│   │   ├── services.service.ts
+│   │   ├── services.repository.ts
+│   │   ├── services.model.ts
+│   │   └── services.types.ts
+│   ├── verification/                 # POST /v1/verify — sk_live_ doğrulama
 │   │   ├── verification.router.ts
 │   │   ├── verification.service.ts
 │   │   └── verification.types.ts
+│   ├── verify-service/               # POST /v1/verify/service — svc_live_ doğrulama
+│   │   ├── verify-service.router.ts
+│   │   ├── verify-service.service.ts
+│   │   └── verify-service.types.ts
 │   ├── usage/
 │   │   ├── usage.service.ts
 │   │   ├── usage.repository.ts
-│   │   ├── usage.model.ts
+│   │   ├── usage.model.ts            # apiKeyId? + serviceId? — her ikisi aynı anda dolu olmaz
 │   │   └── usage.types.ts
 │   ├── middleware/
-│   │   ├── authGuard.ts
+│   │   ├── authGuard.ts              # JWT doğrulama + Redis blacklist
 │   │   ├── errorHandler.ts
 │   │   ├── validateDto.ts
 │   │   └── rateLimiter.ts
@@ -546,12 +561,22 @@ Tenant izolasyon katmanı. Her API key bir projeye aittir.
 - Tüm key işlemleri, isteği yapan kullanıcıya ait geçerli bir `projectId` gerektirir
 
 ### apikeys/
-Temel credential yönetimi.
+External client credential yönetimi.
 - Key'ler `sk_live_` prefix'iyle üretilir
 - Yapı: `sk_live_<publicPart>.<secretPart>`
 - **MongoDB'ye yalnızca hash'lenmiş secret kaydedilir — asla plaintext**
 - Key'ler kullanıcıya yalnızca oluşturulma anında gösterilir
-- Revocation anlıktır
+- Revocation anlıktır — Redis cache de temizlenir (`redis.del("apikey:<hash>")`)
+
+### services/
+Microservice identity yönetimi. ApiKey ile aynı güvenlik prensipleri, farklı domain.
+- Key'ler `svc_live_` prefix'iyle üretilir
+- Yapı: `svc_live_<publicPart>.<secretPart>`
+- `revokedAt?: Date` kullanır (`revoked: boolean` değil) — audit trail
+- Service name project içinde unique: `{ projectId, name }` compound unique index
+- Revocation → Redis cache temizlenir (`redis.del("svckey:<hash>")`)
+
+**ÖNEMLİ:** `sk_live_` ve `svc_live_` key'ler birbirinin endpoint'inde çalışmaz. `verification.service` yalnızca `sk_live_` kabul eder; `verify-service.service` yalnızca `svc_live_` kabul eder.
 
 ### verification/
 En performans-kritik bileşen. Hedef: **ortalama <5ms**.
@@ -560,9 +585,9 @@ Doğrulama akışı:
 ```
 POST /v1/verify (Bearer sk_live_xxxxx)
         │
-   Key'i ayıkla
+   Key'i ayıkla + sk_live_ prefix kontrol
         │
-   Redis lookup
+   Redis lookup (apikey:<hash>)
         │
   ├── Cache hit  → doğrula + rate limit kontrolü
   └── Cache miss → MongoDB lookup → sonucu cache'e yaz
@@ -570,7 +595,26 @@ POST /v1/verify (Bearer sk_live_xxxxx)
    { valid, projectId, rateLimitRemaining } döndür
 ```
 
-**Fail closed:** MongoDB'ye ulaşılamazsa isteği reddet. Asla fail open yapma.
+**Fail closed:** MongoDB/Redis'e ulaşılamazsa isteği reddet. Asla fail open yapma.
+
+### verify-service/
+Service-to-service doğrulama. `verification/` ile özdeş yapı, farklı kimlik tipi.
+
+Doğrulama akışı:
+```
+POST /v1/verify/service (Bearer svc_live_xxxxx)
+        │
+   Key'i ayıkla + svc_live_ prefix kontrol
+        │
+   Redis lookup (svckey:<hash>)
+        │
+  ├── Cache hit  → doğrula + revoke/rate limit kontrolü
+  └── Cache miss → MongoDB lookup → sonucu cache'e yaz
+        │
+   { valid, projectId, service: { id, name }, rateLimitRemaining } döndür
+```
+
+**Redis namespace'leri:** `apikey:` vs `svckey:` — karışmaz.
 
 ### usage/
 Her doğrulama olayını asenkron (non-blocking) olarak kaydeder.
@@ -583,7 +627,8 @@ export type VerificationResult = "success" | "invalid_key" | "revoked" | "rate_l
 
 export interface UsageLogDto {
   projectId: string;
-  apiKeyId: string;
+  apiKeyId?: string;   // ApiKey verify'da dolu
+  serviceId?: string;  // Service verify'da dolu — ikisi aynı anda dolu OLMAZ
   result: VerificationResult;
   latencyMs: number;
   ip: string;
@@ -666,6 +711,13 @@ POST   /v1/projects/:projectId/keys
 DELETE /v1/projects/:projectId/keys/:keyId
 ```
 
+### Servisler
+```
+GET    /v1/projects/:projectId/services
+POST   /v1/projects/:projectId/services
+DELETE /v1/projects/:projectId/services/:serviceId
+```
+
 ### İstatistikler
 ```
 GET    /v1/projects/:projectId/stats?range=7d
@@ -673,32 +725,39 @@ GET    /v1/projects/:projectId/stats?range=7d
 
 ### Doğrulama (public, JWT gerekmez)
 ```
-POST   /v1/verify
+POST   /v1/verify           # sk_live_ API key doğrulama
+POST   /v1/verify/service   # svc_live_ service key doğrulama
 ```
 
 ---
 
 ## Doğrulama Yanıt Formatları
 
+### `POST /v1/verify` (sk_live_)
+
 **200 — geçerli**
 ```json
 { "valid": true, "projectId": "...", "rateLimitRemaining": 98 }
 ```
 
-**401 — geçersiz key**
+**401** `{ "valid": false, "error": "invalid_key" }`
+
+**403** `{ "valid": false, "error": "key_revoked" }`
+
+**429** `{ "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }`
+
+### `POST /v1/verify/service` (svc_live_)
+
+**200 — geçerli**
 ```json
-{ "valid": false, "error": "invalid_key" }
+{ "valid": true, "projectId": "...", "service": { "id": "...", "name": "billing-service" }, "rateLimitRemaining": 98 }
 ```
 
-**403 — iptal edilmiş key**
-```json
-{ "valid": false, "error": "key_revoked" }
-```
+**401** `{ "valid": false, "error": "invalid_key" }`
 
-**429 — rate limit aşıldı**
-```json
-{ "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }
-```
+**403** `{ "valid": false, "error": "service_revoked" }`
+
+**429** `{ "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }`
 
 ---
 
@@ -710,14 +769,16 @@ Bunlar pazarlık konusu değildir. Asla ihlal edilmez:
 2. **Key doğrulamada her zaman constant-time comparison kullan.** `crypto.timingSafeEqual()` kullan. Normal `===` timing attack'a açık.
 3. **Fail closed.** Altyapı hatası nedeniyle doğrulama tamamlanamazsa `valid: false` döndür.
 4. **Tenant izolasyonu.** Herhangi bir key işlemi öncesinde isteği yapan kullanıcının projeye sahip olduğunu doğrula.
-5. **Tüm yönetim endpoint'lerinde JWT zorunlu.** Yalnızca `/v1/verify` ve auth endpoint'leri public'tir.
+5. **Tüm yönetim endpoint'lerinde JWT zorunlu.** Yalnızca `/v1/verify`, `/v1/verify/service` ve auth endpoint'leri public'tir.
 6. **Logout token blacklist ile yapılır.** Access token Redis'e eklenir, refresh token MongoDB'den silinir.
 7. **Rate limiting çok katmanlı uygulanır.** IP bazlı + key bazlı + endpoint bazlı. Sadece key bazlı yetmez.
 8. **JWT algorithm açıkça belirtilir.** `jwt.sign()` çağrısında `algorithm: 'HS256'`, `jwt.verify()` çağrısında `algorithms: ['HS256']` zorunludur. Algorithm confusion saldırısını (`alg: none`) önler.
 9. **Refresh token rotation zorunludur.** Her `/refresh` çağrısında eski token revoke edilip yeni token verilir. Aynı refresh token ikinci kez kullanılamaz. Revoke edilmiş token gelirse tüm kullanıcı oturumları kapatılır (token theft signal).
 10. **Input boyutu sınırlandırılır.** `express.json({ limit: '16kb' })` zorunludur. DTO'lardaki tüm string field'lara `@MaxLength()` dekoratörü eklenir. Authorization header 200 karakterden uzunsa reddedilir.
 11. **Hata mesajları bilgi sızdırmaz.** Register endpoint'i "email zaten kayıtlı" gibi kullanıcı varlığını teyit eden mesaj döndürmez — saldırgan bunu user enumeration için kullanamaz.
-12. **Her yönetim endpoint'i `authGuard` kullanır.** Yalnızca `/v1/verify` ve `/v1/auth/*` endpoint'leri guard dışındadır.
+12. **Her yönetim endpoint'i `authGuard` kullanır.** Yalnızca `/v1/verify`, `/v1/verify/service` ve `/v1/auth/*` endpoint'leri guard dışındadır.
+13. **`sk_live_` ve `svc_live_` key'ler birbirinin endpoint'inde çalışmaz.** `verification.service.ts` yalnızca `sk_live_` prefix'ini kabul eder; `verify-service.service.ts` yalnızca `svc_live_` prefix'ini kabul eder. Cross-contamination yoktur.
+14. **Service revoke, API key revoke'tan farklıdır.** API key'de `revoked: boolean`, Service'de `revokedAt?: Date`. Redis cache key'leri de farklı: `apikey:<hash>` vs `svckey:<hash>`.
 
 ---
 
@@ -927,3 +988,5 @@ npm run format
 - JWT `sign()` çağrısında `algorithm: 'HS256'`, `verify()` çağrısında `algorithms: ['HS256']` her zaman yazılır. Varsayılana güvenme.
 - Refresh token response body'ye asla yazılmaz — sadece HTTP-only cookie olarak gönderilir.
 - Register/login gibi sensitif endpoint'lerde hata mesajı kullanıcı varlığını teyit etmemelidir (enumeration koruması).
+- `apikeys/` ve `services/` modülleri birbirinden tamamen bağımsızdır. `sk_live_` key `/v1/verify/service`'te geçersizdir; `svc_live_` key `/v1/verify`'da geçersizdir.
+- `UsageLogDto`'da `apiKeyId` ve `serviceId` aynı anda dolu olamaz — biri doluysa diğeri `undefined`.
