@@ -1,8 +1,6 @@
 # Elyzor — Microservice Trust Architecture
 
-Bu doküman, Elyzor’un **microservice ortamında nasıl kullanılacağını** ve sistemin mimari amacını açık şekilde tanımlar.
-
-Bu belge Claude Code veya başka bir AI agent’a verilerek implementasyon yapılması hedeflenmiştir.
+Bu doküman Elyzor'un microservice ortamında nasıl konumlandığını ve iki kimlik tipinin kullanım senaryolarını açıklar.
 
 ---
 
@@ -10,309 +8,193 @@ Bu belge Claude Code veya başka bir AI agent’a verilerek implementasyon yapı
 
 Elyzor bir **User Authentication sistemi değildir**.
 
-Elyzor’un amacı:
-
-> Microservice'ler ve backend servisleri arasında güvenli kimlik doğrulama (service authentication) sağlamaktır.
-
 Elyzor şunu çözer:
 
-* Hangi servis isteği gönderdi?
-* Bu servis gerçekten tanımlı mı?
-* Bu servis bu project’e ait mi?
-* Servis yetkili mi?
+- Hangi client bu isteği gönderdi?
+- Bu client tanımlı mı?
+- Bu client bu projeye ait mi?
+- Bu client yetkili mi?
 
-Elyzor **insan kullanıcıları yönetmez**.
+**Elyzor insan kullanıcıları yönetmez.**
 
 ---
 
-## 2. Temel Kavramlar
+## 2. Kimlik Tipleri
+
+### API Key (`sk_live_`)
+
+External client → Backend trust için kullanılır.
+
+Örnek: Bir mobil uygulama veya üçüncü taraf integration, backend API'nize istek atarken `sk_live_` key gönderir. Backend, bu key'i Elyzor'a doğrulattırır.
+
+```
+Mobil Uygulama
+      │  Authorization: Bearer sk_live_xxxxx
+      ▼
+  Backend API
+      │  POST /v1/verify
+      ▼
+   Elyzor
+      │  { valid: true, projectId, rateLimitRemaining }
+      ▼
+  Backend API → isteği işler
+```
+
+### Service Key (`svc_live_`)
+
+Microservice → Microservice trust için kullanılır.
+
+Örnek: API Gateway, Billing Service'e istek atarken kendi `svc_live_` key'ini gönderir. Billing Service bu kimliği Elyzor'a doğrulattırır.
+
+```
+API Gateway
+      │  Authorization: Bearer svc_live_xxxxx
+      ▼
+  Billing Service
+      │  POST /v1/verify/service
+      ▼
+   Elyzor
+      │  { valid: true, projectId, service: { id, name } }
+      ▼
+  Billing Service → authorization kararını verir
+```
+
+---
+
+## 3. Temel Kavramlar
 
 ### Elyzor User
 
-Elyzor dashboard’una giriş yapan developer veya founder’dır.
+Elyzor dashboard'una giriş yapan developer veya kurucu. Görevleri:
 
-Görevleri:
-
-* Project oluşturmak
-* Service tanımlamak
-* Service key üretmek
-
-Bu kullanıcılar sadece Elyzor müşterileridir.
-
----
+- Project oluşturmak
+- API key ve service key üretmek / yönetmek
+- Usage istatistiklerini izlemek
 
 ### Project (Tenant)
 
-Her müşteri kendi backend sistemini temsil eden bir Project oluşturur.
+Her müşteri kendi backend sistemini temsil eden bir Project oluşturur. Project izolasyon boundary'sidir — tüm key'ler proje altında çalışır.
 
-Örnek:
-
-```
-Project: xyz-production
-```
-
-Project izolasyon boundary’sidir.
-
-Tüm servisler project altında çalışır.
-
----
-
-### Service Identity
-
-Her microservice bir kimliğe sahiptir.
-
-Örnek servisler:
+### Key Yapısı
 
 ```
-api-gateway
-billing-service
-order-service
-notification-worker
+sk_live_<publicPart>.<secretPart>   → 16 + 64 hex karakter
+svc_live_<publicPart>.<secretPart>  → 16 + 64 hex karakter
 ```
 
-Her servis Elyzor tarafından tanımlanır.
+Key'ler environment variable olarak saklanır:
 
----
-
-### Service Key
-
-Her servis için Elyzor bir key üretir:
-
-```
-svc_live_xxxxxxxxx
-```
-
-Bu key:
-
-* Servisin kimliğidir
-* Environment variable olarak saklanır
-* Servisler arası çağrılarda kullanılır
-
-Örnek:
-
-```
-ELYZOR_SERVICE_KEY=svc_live_billing_xxx
+```bash
+ELYZOR_API_KEY=sk_live_xxxxxxxx.yyyyyyyy
+ELYZOR_SERVICE_KEY=svc_live_xxxxxxxx.yyyyyyyy
 ```
 
 ---
 
-## 3. Production Akışı
+## 4. Verification Akışı
 
-### Senaryo
-
-API Gateway → Billing Service çağrısı yapıyor.
-
----
-
-### Step 1 — Request Gönderimi
-
-Gateway billing servisine istek gönderir:
+### API Key Doğrulama
 
 ```
-POST /charge
-Authorization: Bearer svc_live_gateway_xxx
+POST /v1/verify
+Authorization: Bearer sk_live_xxxxx.yyyyy
+
+─── Elyzor içinde ───────────────────────────────
+1. sk_live_ prefix kontrolü
+2. publicPart.secretPart parse
+3. SHA-256(secretPart) → hash
+4. Redis lookup (apikey:<hash>)
+   ├── Cache hit  → constant-time compare
+   └── Cache miss → MongoDB lookup → cache'e yaz
+5. Revoke kontrolü (revoked: boolean)
+6. Rate limit kontrolü (proje bazında)
+7. Usage log (fire & forget)
+─────────────────────────────────────────────────
+
+200 OK: { "valid": true, "projectId": "...", "rateLimitRemaining": 98 }
+401:    { "valid": false, "error": "invalid_key" }
+403:    { "valid": false, "error": "key_revoked" }
+429:    { "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }
 ```
 
-Gateway kendi servis kimliğini gönderir.
-
----
-
-### Step 2 — Service Verification
-
-Billing servisi isteğe direkt güvenmez.
-
-İlk olarak Elyzor’a doğrulama isteği gönderir:
+### Service Key Doğrulama
 
 ```
 POST /v1/verify/service
-Authorization: Bearer svc_live_gateway_xxx
+Authorization: Bearer svc_live_xxxxx.yyyyy
+
+─── Elyzor içinde ───────────────────────────────
+1. svc_live_ prefix kontrolü
+2. publicPart.secretPart parse
+3. SHA-256(secretPart) → hash
+4. Redis lookup (svckey:<hash>)
+   ├── Cache hit  → constant-time compare + revokedAt kontrolü
+   └── Cache miss → MongoDB lookup → cache'e yaz
+5. Revoke kontrolü (revokedAt != null)
+6. Rate limit kontrolü (proje bazında)
+7. Usage log (fire & forget)
+─────────────────────────────────────────────────
+
+200 OK: { "valid": true, "projectId": "...", "service": { "id": "...", "name": "api-gateway" }, "rateLimitRemaining": 98 }
+401:    { "valid": false, "error": "invalid_key" }
+403:    { "valid": false, "error": "service_revoked" }
+429:    { "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }
 ```
 
 ---
 
-### Step 3 — Elyzor Doğrulama Süreci
+## 5. Kritik Mimari Kural
 
-Elyzor içinde:
+Elyzor request path'inde **değildir**.
 
-1. Key prefix kontrolü
-2. Key parse edilmesi
-3. Hash lookup
-4. Project resolve
-5. Service resolve
-6. Revoked kontrolü
-7. Rate limit kontrolü
-8. Usage log kaydı
+```
+YANLIŞ:
+Gateway → Elyzor → Billing
+
+DOĞRU:
+Gateway → Billing
+              ↓
+          Elyzor Verify
+```
+
+Elyzor sadece trust authority'dir. Uygulama trafiğini proxy'lemez.
 
 ---
 
-### Step 4 — Elyzor Response
+## 6. Authorization Elyzor'un Sorumluluğu Değildir
 
-```
-{
-  "valid": true,
-  "projectId": "xyz-production",
-  "service": {
-    "id": "svc_123",
-    "name": "api-gateway"
-  }
+Elyzor yalnızca **authentication** yapar: "bu kimlik geçerli mi?"
+
+**Authorization** ("bu kimlik X'i yapabilir mi?") uygulamanın kendisine aittir:
+
+```ts
+const result = await elyzor.verifyService(req.headers.authorization);
+
+if (!result.valid) {
+  return res.status(401).json({ error: 'unauthorized' });
+}
+
+// Elyzor'dan gelen service.name ile kendi authorization kararını ver
+if (result.service.name !== 'api-gateway') {
+  return res.status(403).json({ error: 'forbidden' });
 }
 ```
 
 ---
 
-### Step 5 — Local Authorization
+## 7. Elyzor'un Sorumlulukları
 
-Billing servisi artık çağıranın kim olduğunu bilir.
+Elyzor yapar:
 
-Servis kendi authorization kararını verir:
+- Service identity üretir
+- API key ve service key doğrular
+- Project boundary korur
+- Usage log tutar
+- Rate limit uygular
 
-```
-gateway → billing ✅
-worker → billing ❌
-```
+Elyzor yapmaz:
 
-Elyzor authorization yapmaz.
-
-Sadece authentication yapar.
-
----
-
-## 4. Kritik Mimari Kural
-
-Elyzor request path’inde değildir.
-
-YANLIŞ:
-
-```
-Gateway → Elyzor → Billing
-```
-
-DOĞRU:
-
-```
-Gateway → Billing
-            ↓
-        Elyzor Verify
-```
-
-Elyzor sadece trust authority’dir.
-
----
-
-## 5. Elyzor’un Sorumluluğu
-
-Elyzor:
-
-✅ Service identity üretir
-✅ Service doğrular
-✅ Project boundary korur
-✅ Usage log tutar
-✅ Rate limit uygular
-
-Elyzor:
-
-❌ User login yönetmez
-❌ Session yönetmez
-❌ Business authorization yapmaz
-
----
-
-## 6. Mimari Hedef
-
-Elyzor’un hedefi:
-
-> Backend sistemleri için Zero-Trust Service Authentication katmanı olmak.
-
-Her servis birbirine değil,
-Elyzor’a güvenir.
-
-```
-Service → Trust → Elyzor
-```
-
----
-
-## 7. Implementasyon Hedefleri (Claude Code Görevi)
-
-Claude aşağıdaki özellikleri implemente etmelidir:
-
-### 1. Service Model
-
-Alanlar:
-
-* id
-* projectId
-* name
-* keyHash
-* createdAt
-* revokedAt (optional)
-
----
-
-### 2. Service Key Generation
-
-Prefix:
-
-```
-svc_live_
-```
-
-Key plaintext saklanmaz.
-Sadece hash saklanır.
-
----
-
-### 3. Verify Service Endpoint
-
-Endpoint:
-
-```
-POST /v1/verify/service
-```
-
-Davranış:
-
-* Bearer token al
-* Key parse et
-* Hash doğrula
-* Service bul
-* Project resolve et
-* Rate limit uygula
-* Usage log oluştur
-
-Response:
-
-```
-valid
-projectId
-serviceId
-serviceName
-```
-
----
-
-### 4. Usage Tracking
-
-Her verify çağrısında:
-
-* serviceId
-* projectId
-* timestamp
-* latency
-* ip
-
-loglanmalıdır.
-
-Verify işlemi bloklanmamalıdır (fire-and-forget).
-
----
-
-## 8. Nihai Tanım
-
-Elyzor:
-
-> Developer-friendly Service Authentication Infrastructure
-
-User authentication sistemi değildir.
-
----
+- User login yönetmez
+- Session yönetmez
+- Business authorization yapmaz
+- Uygulama trafiğini proxy'lemez

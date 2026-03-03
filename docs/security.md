@@ -6,21 +6,20 @@ Elyzor **zero-trust** tasarım anlayışını benimser. Servisler arası hiçbir
 
 ---
 
-## API Key Güvenliği
+## API Key ve Service Key Güvenliği
 
 ### Saklama
 
-API key'ler **asla plaintext olarak saklanmaz.** MongoDB'ye yazılmadan önce SHA-256 ile hash'lenir.
+Key'ler **asla plaintext olarak saklanmaz.** MongoDB'ye yazılmadan önce `secretPart` SHA-256 ile hash'lenir.
 
-Kullanıcıya key yalnızca bir kez gösterilir — oluşturulma anında. Sonrasında erişilemez.
-
-Key yapısı:
+Key yapıları:
 
 ```
-sk_live_<publicPart>.<secretPart>
+sk_live_<publicPart>.<secretPart>   → API Key
+svc_live_<publicPart>.<secretPart>  → Service Key
 ```
 
-`publicPart` key'i tanımlamak için kullanılır. `secretPart` hash'lenerek saklanır.
+`publicPart` key'i tanımlamak için kullanılır. `secretPart` hash'lenerek saklanır. Key yalnızca oluşturulma veya rotation anında gösterilir — sonrasında erişilemez.
 
 ### Doğrulama
 
@@ -28,40 +27,42 @@ Verification sırasında **constant-time comparison** kullanılır (`crypto.timi
 
 Normal string karşılaştırması (`===`) kullanılmaz — karakterler eşleştiği sürece erken dönebilir ve bu zamanlama farkı saldırgana bilgi sızdırır.
 
+### Namespace İzolasyonu
+
+`sk_live_` ve `svc_live_` key'ler birbirinin endpoint'inde çalışmaz:
+
+- `POST /v1/verify` → yalnızca `sk_live_` prefix'i kabul eder
+- `POST /v1/verify/service` → yalnızca `svc_live_` prefix'i kabul eder
+
+Redis cache namespace'leri de ayrıdır: `apikey:<hash>` vs `svckey:<hash>`.
+
 ### Revocation
 
 Key revocation **anlıktır.** Revoke edilen key Redis cache'inden temizlenir, bir sonraki verification isteğinde reddedilir.
 
+API Key: `revoked: boolean` field'ı kullanır.
+Service Key: `revokedAt: Date | null` field'ı kullanır — audit trail için tarih saklanır.
+
+### Key Rotation
+
+Yeni key oluştur → eski key revoke et → Redis cache temizle sırası uygulanır. Revoke edilmiş key rotate edilemez (`ForbiddenError`). Yeni plaintext key yalnızca rotation response'unda döner.
+
 ---
 
-## Kimlik Doğrulama
+## Kimlik Doğrulama (Platform Kullanıcıları)
 
-### Token Tipi İzolasyonu (userType)
-
-JWT payload'ında `userType` claim'i zorunludur:
-
-```
-Platform token: { userId, email, userType: 'platform', tokenType: 'access' }
-Project token:  { userId, email, userType: 'project',  projectId, tokenType: 'access' }
-```
-
-`platformGuard` → `userType !== 'platform'` ise 401 — project token ile platform endpoint'ine erişilemez.
-`projectGuard` → `userType !== 'project'` veya `projectId` eksikse 401 — platform token ile project endpoint'ine erişilemez.
-
-Bu izolasyon kritik bir güvenlik sınırıdır: XYZ'nin son kullanıcısı (alice), platform yönetim API'sine erişemez.
-
-### Platform Kullanıcıları (JWT)
-
-Proje ve key yönetimi için iki katmanlı JWT stratejisi:
+### JWT Stratejisi
 
 | Token | Süre | Taşıma | Amaç |
 |---|---|---|---|
 | Access token | 15 dakika | `Authorization: Bearer` header | Her istekte kimlik doğrulama |
 | Refresh token | 7 gün | HTTP-only cookie | Yeni access token alma |
 
-Access token expire olunca client `POST /v1/auth/refresh` ile yeni access token alır. Refresh token JavaScript'ten erişilemez — XSS saldırılarına karşı korumalı.
+Refresh token JavaScript'ten erişilemez — XSS saldırılarına karşı korumalıdır.
 
-**Logout — token blacklist:**
+**JWT algorithm sabitleme:** `jwt.sign()` çağrısında `algorithm: 'HS256'`, `jwt.verify()` çağrısında `algorithms: ['HS256']` zorunludur. Algorithm confusion saldırısını (`alg: none`) önler.
+
+### Logout — Token Blacklist
 
 JWT stateless olduğu için token imzası geçerli olduğu sürece sunucu tarafında iptal edilemez. Çözüm:
 
@@ -77,17 +78,26 @@ authGuard her istekte:
 
 **Logout-all:** Kullanıcının tüm refresh token'ları MongoDB'den silinir (tüm cihazlardan çıkış).
 
+### Refresh Token Rotation
+
+Her `/refresh` isteğinde eski token revoke edilir, yeni token çifti verilir. Aynı refresh token ikinci kez kullanılamaz.
+
+**Token theft detection:** Revoke edilmiş bir refresh token gelirse saldırı sinyali kabul edilir — kullanıcının tüm oturumları derhal kapatılır (`revokeAllUserTokens`).
+
+Rotation her zaman DB'den yapılır — Redis cache revoke durumunu gizleyebileceği için `findRefreshTokenAny` ile MongoDB'den doğrulanır.
+
+---
+
+## Tenant İzolasyonu
+
+Her işlem öncesinde `assertOwnership()` ile isteği yapan kullanıcının ilgili projeye sahip olduğu doğrulanır. Bir projenin ele geçirilmesi diğer projeleri etkilemez.
+
 Tüm yönetim endpoint'leri `authGuard` middleware'i ile korunur.
 
-Yalnızca şunlar public'tir:
-- `POST /v1/auth/register`
-- `POST /v1/auth/login`
-- `POST /v1/auth/refresh`
-- `POST /v1/verify`
-
-### Tenant İzolasyonu
-
-Her işlem öncesinde isteği yapan kullanıcının ilgili projeye sahip olduğu doğrulanır. Bir projenin ele geçirilmesi diğer projeleri etkilemez.
+Public endpoint'ler:
+- `POST /v1/auth/register`, `/login`, `/refresh`
+- `POST /v1/verify`, `/v1/verify/service`
+- `GET /v1/health`
 
 ---
 
@@ -103,8 +113,9 @@ Her işlem öncesinde isteği yapan kullanıcının ilgili projeye sahip olduğu
 
 | Katman | Kapsam | Endpoint | Config |
 |---|---|---|---|
-| IP bazlı | Tüm IP'ler | `/v1/auth/login`, `/v1/auth/register` | `RATE_LIMIT_IP_MAX` / `RATE_LIMIT_IP_WINDOW_SECONDS` |
+| IP bazlı | Tüm IP'ler | `/v1/auth/login`, `/v1/auth/register`, `/v1/verify`, `/v1/verify/service` | `RATE_LIMIT_IP_MAX` / `RATE_LIMIT_IP_WINDOW_SECONDS` |
 | Key bazlı | Proje başına | `/v1/verify` | `RATE_LIMIT_KEY_MAX` / `RATE_LIMIT_KEY_WINDOW_SECONDS` |
+| Service key bazlı | Proje başına | `/v1/verify/service` | `RATE_LIMIT_KEY_MAX` / `RATE_LIMIT_KEY_WINDOW_SECONDS` |
 
 Limit aşıldığında:
 
@@ -112,23 +123,33 @@ Limit aşıldığında:
 { "valid": false, "error": "rate_limit_exceeded", "retryAfter": 42 }
 ```
 
+**Fail-open:** IP rate limit middleware Redis'e ulaşamadığında isteği geçirir. Key/service doğrulaması ise fail-closed'dır.
+
 ---
 
 ## Input Validation
 
 Tüm request body'leri `validateDto` middleware'i ile HTTP sınırında doğrulanır. `class-validator` dekoratörleri kullanılır.
 
-Her domain kendi DTO sınıfını tanımlar (`src/*/dtos/`). Validation hatası durumunda istek service katmanına ulaşmadan `400 validation_error` döner.
+`whitelist: true` ile tanımsız property'ler otomatik olarak request body'den temizlenir — mass assignment saldırılarına karşı koruma.
 
-`whitelist: true` seçeneği ile tanımsız property'ler otomatik olarak request body'den temizlenir — mass assignment saldırılarına karşı koruma sağlar.
+**Boyut sınırları:**
+- JSON payload: `express.json({ limit: '16kb' })`
+- `Authorization` header: 200 karakterden uzunsa reddedilir
+- email max 255, password max 128, name max 100 (`@MaxLength()` dekoratörleri)
 
 ---
 
-## V1 Kapsam Dışı
+## Hata Mesajı Güvenliği
+
+Register endpoint'i email çakışmasında kullanıcı varlığını teyit eden mesaj döndürmez — user enumeration koruması. Login ve register hata mesajları belirsiz tutulur.
+
+---
+
+## V2 Roadmap
 
 - Webhook imzalama
-- IP whitelist/blacklist
-- Key rotation otomasyonu
+- IP whitelist per key
+- Key TTL (otomatik expiry)
+- Key bazında farklı rate limit
 - Anomali tespiti
-
-Bunlar V2/V3 roadmap'inde.
